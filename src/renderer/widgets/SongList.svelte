@@ -402,13 +402,15 @@
     display: grid;
     height: var(--row-height);
     align-items: center;
+    cursor: default;
+    user-select: none;
   }
 
   .row:hover { background: var(--row-hover); }
+  /* After :hover deliberately — a selected row stays visibly selected under the pointer. */
   .row.sel { background: var(--row-selected); }
   .row.playing { box-shadow: inset 3px 0 0 var(--accent); }
   .row.playing .cell:nth-child(2) { color: var(--text-heading); font-weight: 600; }
-  .row { cursor: default; user-select: none; }
 
   .cell {
     padding: 0 var(--space-3);

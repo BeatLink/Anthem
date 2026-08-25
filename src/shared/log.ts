@@ -42,7 +42,9 @@ export function parseLevelSpec(spec: string | undefined, fallback: Level = DEFAU
     const part = partRaw.trim().toLowerCase()
     if (part === '') continue
 
-    const colon = part.indexOf(':')
+    // Split on the LAST colon: scopes are themselves colon-separated, so `ui:songlist:debug`
+    // names the scope `ui:songlist` at level `debug`, not a scope `ui` at level `songlist:debug`.
+    const colon = part.lastIndexOf(':')
     if (colon === -1) {
       const level = ALIASES[part]
       if (level) out.default = level

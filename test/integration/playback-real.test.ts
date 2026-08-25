@@ -36,7 +36,14 @@ describe.runIf(hasLiveLibrary() && mpv)('playback against the real library', () 
     await player.setVolume(0)
     await player.playTrack(row.id)
 
-    await new Promise((r) => setTimeout(r, 2500))
+    // Poll rather than sleep a fixed amount: mpv start-up is slower when the whole suite is
+    // running in parallel, and a fixed wait turns that into a flake.
+    const deadline = Date.now() + 15_000
+    while (Date.now() < deadline) {
+      const s = player.status()
+      if (s.positionMs > 0 || s.error) break
+      await new Promise((r) => setTimeout(r, 250))
+    }
 
     const s = player.status()
     console.log(`  state=${s.state} position=${s.positionMs}ms duration=${s.durationMs}ms`)

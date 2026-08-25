@@ -36,6 +36,14 @@ describe('parseLevelSpec', () => {
     expect(spec.scopes).toEqual({ db: 'debug' })
   })
 
+  it('configures a nested scope, which contains colons of its own', () => {
+    // Renderer scopes are prefixed with ui:, and child loggers nest further.
+    const spec = parseLevelSpec('info,ui:songlist:debug,play:mpv:error')
+    expect(spec.scopes).toEqual({ 'ui:songlist': 'debug', 'play:mpv': 'error' })
+    expect(enabled(spec, 'ui:songlist', 'debug')).toBe(true)
+    expect(enabled(spec, 'ui:other', 'debug')).toBe(false)
+  })
+
   it('is case and whitespace insensitive', () => {
     expect(parseLevelSpec('  WARN , Play : DEBUG ').scopes).toEqual({ play: 'debug' })
   })
