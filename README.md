@@ -24,7 +24,8 @@ implemented yet. See the roadmap in DESIGN-SPEC §15.
 | Framework-free view state (selection, sort, virtualization) | working |
 | Halon theming | working |
 | Renderer shell | placeholder widgets |
-| Playback (mpv) | not started |
+| Playback (mpv, queue, repeat/shuffle, play counting) | working |
+| MPRIS, media keys, crossfade | not started |
 | Tag writing | not started (read-only by default) |
 | Filesystem watching | not started |
 | Merge tracks, with per-field resolution and undo | working |

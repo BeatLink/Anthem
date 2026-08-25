@@ -17,6 +17,13 @@ if [[ "${ANTHEM_ALLOW_WRITES:-}" != "1" ]]; then
   export ANTHEM_FORCE_READ_ONLY=1
 fi
 
+# The app runs outside the dev shell, so point it at an mpv if one is not on PATH.
+if [[ -z "${ANTHEM_MPV:-}" ]]; then
+  ANTHEM_MPV=$(command -v mpv || ls -d /nix/store/*-mpv-0.*/bin/mpv 2>/dev/null | head -1 || true)
+  export ANTHEM_MPV
+fi
+[[ -n "${ANTHEM_MPV:-}" ]] && echo "anthem: mpv $ANTHEM_MPV"
+
 ELECTRON="${ELECTRON_EXEC:-$(command -v electron || true)}"
 if [[ -z "$ELECTRON" ]]; then
   ELECTRON=$(ls -d /nix/store/*-electron-43.*/bin/electron 2>/dev/null | head -1)

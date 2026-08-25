@@ -12,6 +12,9 @@ import { importGmbrc } from './import/gmb-import'
 import { scanRoots } from './library/scan'
 import { mergePreview, mergeTracks, unmerge } from './library/merge'
 import { findDuplicates } from './library/duplicates'
+import { Player } from './play/player'
+import { MpvEngine, findMpv } from './play/mpv'
+import { NullEngine } from './play/engine'
 import {
   EVENT_CHANNEL, type AnthemEvents, type EventName, type FileResult, type Root
 } from '@shared/ipc'
@@ -35,6 +38,22 @@ function emit<E extends EventName>(name: E, payload: AnthemEvents[E]): void {
 export function registerIpc(db: DB): void {
   // A scan runs at most once at a time; the flag is what cancel flips.
   let scanning: { aborted: boolean } | null = null
+
+  // Without mpv the app still runs and the library still works; only audio is unavailable, and the
+  // player reports that plainly rather than failing at the first click.
+  const mpvPath = findMpv()
+  if (!mpvPath) console.warn('anthem: mpv not found; playback disabled (set ANTHEM_MPV)')
+
+  const player = new Player(
+    db as never,
+    mpvPath ? new MpvEngine({ binary: mpvPath }) : new NullEngine(),
+    { replayGain: 'track' }
+  )
+
+  player.subscribe((event, payload) => {
+    if (event === 'status') emit('player:status', payload as never)
+    else if (event === 'position') emit('player:position', payload as never)
+  })
 
   const handlers: Handlers = {
     'app:info': () => ({
@@ -186,6 +205,31 @@ export function registerIpc(db: DB): void {
       }
       return run as never
     })(),
+
+    'player:status': () => player.status() as never,
+
+    'player:playTrack': (req) => {
+      if (req.context) player.setContext(req.context, req.index ?? -1)
+      void player.playTrack(req.trackId, req.index ?? -1)
+      return player.status() as never
+    },
+
+    'player:toggle': () => { void player.toggle(); return player.status() as never },
+    'player:next': () => { void player.next(true); return player.status() as never },
+    'player:previous': () => { void player.previous(); return player.status() as never },
+    'player:stop': () => { void player.stop(); return player.status() as never },
+    'player:seek': (ms) => { void player.seek(ms); return player.status() as never },
+    'player:volume': (v) => { void player.setVolume(v); return player.status() as never },
+
+    'player:enqueue': (req) => {
+      player.enqueue(req.trackIds, req.position ?? 'end')
+      return player.status() as never
+    },
+
+    'player:dequeue': (index) => { player.dequeue(index); return player.status() as never },
+    'player:clearQueue': () => { player.clearQueue(); return player.status() as never },
+    'player:repeat': (mode) => { player.setRepeat(mode); return player.status() as never },
+    'player:shuffle': (on) => { player.setShuffle(on); return player.status() as never },
 
     'tracks:mergePreview': (ids) => mergePreview(db as never, ids) as never,
 

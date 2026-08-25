@@ -3,6 +3,7 @@
   import { onMount } from 'svelte'
   import type { AppInfo, SafetyStatus } from '@shared/ipc'
   import { library } from './stores/library.svelte'
+  import { player } from './stores/player.svelte'
   import PlayerBlock from './widgets/PlayerBlock.svelte'
   import TabbedLists from './widgets/TabbedLists.svelte'
   import FilterPane from './widgets/FilterPane.svelte'
@@ -20,7 +21,13 @@
   let showSettings = $state(false)
   let settingsSection = $state<'library' | 'folders' | 'import' | 'duplicates' | 'appearance' | 'about'>('library')
 
-  onMount(async () => {
+  onMount(() => {
+    const stopPlayer = player.init()
+    void boot()
+    return stopPlayer
+  })
+
+  async function boot(): Promise<void> {
     info = await ipc('app:info')
     safety = await ipc('app:safety')
     await library.refresh()
@@ -29,7 +36,7 @@
       settingsSection = 'import'
       showSettings = true
     }
-  })
+  }
 
   $effect(() => {
     const root = document.documentElement

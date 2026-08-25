@@ -177,6 +177,32 @@ export interface DuplicateGroup {
   members: DuplicateMember[]
 }
 
+export type RepeatMode = 'off' | 'all' | 'one'
+
+export interface PlayerTrack {
+  id: number
+  title: string | null
+  artist: string | null
+  album: string | null
+  lengthMs: number | null
+  rating: number | null
+}
+
+export interface PlayerStatus {
+  state: 'idle' | 'loading' | 'playing' | 'paused' | 'ended' | 'error'
+  track: PlayerTrack | null
+  media: { id: number; uri: string; startMs: number | null; endMs: number | null; gainDb: number | null } | null
+  positionMs: number
+  durationMs: number | null
+  volume: number
+  repeat: RepeatMode
+  shuffle: boolean
+  queue: number[]
+  contextLength: number
+  contextIndex: number
+  error?: string
+}
+
 export interface AppInfo {
   version: string
   electron: string
@@ -212,6 +238,19 @@ export interface AnthemApi {
     resolutions?: Record<string, Resolution>
   }) => MergeResult
   'tracks:unmerge': (batchId: string) => { batchId: string; restored: number[]; survivor: number }
+  'player:status': () => PlayerStatus
+  'player:playTrack': (req: { trackId: number; context?: number[]; index?: number }) => PlayerStatus
+  'player:toggle': () => PlayerStatus
+  'player:next': () => PlayerStatus
+  'player:previous': () => PlayerStatus
+  'player:stop': () => PlayerStatus
+  'player:seek': (positionMs: number) => PlayerStatus
+  'player:volume': (volume: number) => PlayerStatus
+  'player:enqueue': (req: { trackIds: number[]; position?: 'end' | 'next' }) => PlayerStatus
+  'player:dequeue': (index: number) => PlayerStatus
+  'player:clearQueue': () => PlayerStatus
+  'player:repeat': (mode: RepeatMode) => PlayerStatus
+  'player:shuffle': (on: boolean) => PlayerStatus
   'tracks:duplicates': (opts?: {
     reasons?: DuplicateReason[]
     lengthToleranceMs?: number
@@ -225,6 +264,9 @@ export interface AnthemEvents {
   /** Batched, because one message per file would flood the bridge on a large library. */
   'scan:files': FileResult[]
   'scan:done': ScanReport
+  'player:status': PlayerStatus
+  /** Throttled; the UI interpolates between ticks rather than being fed every frame. */
+  'player:position': { positionMs: number; durationMs: number | null }
 }
 
 export type EventName = keyof AnthemEvents
@@ -256,5 +298,8 @@ export const CHANNELS: readonly Channel[] = [
   'library:explain', 'library:reset', 'fields:list', 'theme:list',
   'import:gmbDefaultPath', 'import:gmbBrowse', 'import:gmbPreview', 'import:gmbRun',
   'library:roots', 'library:addRoot', 'library:removeRoot', 'library:scan', 'library:scanCancel',
-  'tracks:mergePreview', 'tracks:merge', 'tracks:unmerge', 'tracks:duplicates'
+  'tracks:mergePreview', 'tracks:merge', 'tracks:unmerge', 'tracks:duplicates',
+  'player:status', 'player:playTrack', 'player:toggle', 'player:next', 'player:previous',
+  'player:stop', 'player:seek', 'player:volume', 'player:enqueue', 'player:dequeue',
+  'player:clearQueue', 'player:repeat', 'player:shuffle'
 ]

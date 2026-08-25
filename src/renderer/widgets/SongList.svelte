@@ -3,8 +3,16 @@
   import { field } from '@shared/fields'
   import Stars from './Stars.svelte'
   import MergeView from './MergeView.svelte'
+  import { player } from '../stores/player.svelte'
 
   let merging = $state<number[] | null>(null)
+
+  /** Playing from the list makes the whole visible list the context, as every player does. */
+  function playFrom(index: number): void {
+    const t = library.tracks[index]
+    if (!t) return
+    void player.playTrack(t.id, library.tracks.map((x) => x.id), index)
+  }
 
   // Column set is data, so the header context menu can edit it without touching this component.
   let columns = $state(['track_number', 'title', 'artist', 'album', 'year', 'length', 'rating', 'play_count'])
@@ -60,6 +68,11 @@
         {library.selectedCount()} selected ✕
       </button>
     {/if}
+    {#if library.selectedCount() > 0}
+      <button class="clear" onclick={() => player.enqueue(library.selectedIds())}>
+        Queue {library.selectedCount()}
+      </button>
+    {/if}
     {#if library.selectedCount() > 1}
       <button class="merge" onclick={() => (merging = library.selectedIds())}>
         Merge {library.selectedCount()}…
@@ -67,7 +80,7 @@
     {/if}
     <span class="spacer"></span>
     <span class="hint" title="Click a column header to sort. Shift+click another to sort by it next.">
-      shift+click to multi-sort
+      double-click to play · shift+click to multi-sort
     </span>
     <span class="count">{library.tracks.length.toLocaleString()} shown</span>
   </div>
@@ -89,12 +102,15 @@
       <div
         class="row"
         class:sel={library.isSelected(t.id)}
+        class:playing={player.currentId === t.id}
         style:grid-template-columns={template}
         role="row"
         tabindex="0"
         onclick={(e) => library.clickRow(i, { shift: e.shiftKey, ctrl: e.ctrlKey || e.metaKey })}
+        ondblclick={() => playFrom(i)}
         onkeydown={(e) => {
-          if (e.key !== 'Enter' && e.key !== ' ') return
+          if (e.key === 'Enter') { e.preventDefault(); playFrom(i); return }
+          if (e.key !== ' ') return
           e.preventDefault()
           library.clickRow(i, { shift: e.shiftKey, ctrl: e.ctrlKey || e.metaKey })
         }}
@@ -225,7 +241,7 @@
   .head-cell:hover { background: var(--surface-navigation-hover); color: var(--text-body); }
   .head-cell.sorted { color: var(--text-heading); }
 
-  .body { overflow-y: auto; }
+  .body { min-height: 0; overflow-y: auto; }
 
   .row {
     display: grid;
@@ -235,6 +251,8 @@
 
   .row:hover { background: var(--row-hover); }
   .row.sel { background: var(--row-selected); }
+  .row.playing { box-shadow: inset 3px 0 0 var(--accent); }
+  .row.playing .cell:nth-child(2) { color: var(--text-heading); font-weight: 600; }
   .row { cursor: default; user-select: none; }
 
   .cell {

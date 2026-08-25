@@ -96,7 +96,7 @@
 
   .count { font-size: var(--font-size-sm); color: var(--text-tertiary); }
 
-  ul { margin: 0; padding: 0; height: 100%; overflow-y: auto; list-style: none; }
+  ul { margin: 0; padding: 0; min-height: 0; overflow-y: auto; list-style: none; }
 
   .row {
     display: grid;

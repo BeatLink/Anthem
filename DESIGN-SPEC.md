@@ -1015,9 +1015,42 @@ touching every file you rate); when on, writes are deferred and coalesced.
 
 ## 8. Playback
 
+### 8.0 What is implemented
+
+`src/main/play/` — an engine interface, an mpv backend, and a player that owns every decision.
+
+The split is the point: **`player.ts` knows nothing about audio.** Which of a track's media to use,
+when a play counts, how the queue drains against the standing list, what repeat and shuffle mean —
+all of it sits behind `PlaybackEngine` and is tested against a fake engine, so 24 tests cover
+playback behaviour without spawning a process or making a sound.
+
+Decisions worth recording:
+
+- **A play counts at half the track, or four minutes, whichever comes first.** Below that, a track
+  abandoned after at least three seconds counts as a skip; less than three seconds counts as
+  neither, because changing your mind before it starts is not a skip.
+- **A track settles exactly once.** The first version double-counted skips, because both `next()`
+  and `playTrack()` recorded one. Play, skip, or neither — never two.
+- **Seeking backwards cannot fake a second play**: the threshold is measured against the furthest
+  point reached, not the current position.
+- **The best source wins**: present files before missing ones, then `quality_rank`. A track whose
+  files have all disappeared reports that plainly instead of failing at load.
+- **Repeat one ends where it began, but a manual skip still moves on.** Repeating a track forever
+  because the listener pressed Next would be obtuse.
+- **Previous restarts the track first** if more than three seconds in, as every other player does.
+- Shuffle is a seeded permutation, so an order is reproducible and testable; a new pass through a
+  shuffled list reseeds rather than repeating the same order.
+
 ### 8.1 Engine
 
-A `PlaybackEngine` trait with a default **libmpv** implementation. mpv is chosen for the same reason
+A `PlaybackEngine` interface with a default **mpv** implementation, driven over mpv's JSON IPC
+socket as a subprocess rather than by linking libmpv — which keeps the native dependency surface at
+zero, matters more in an Electron app than it would in a Rust one, and costs only a socket.
+
+If mpv is missing, the app still runs: the library works and the player reports that audio is
+unavailable, rather than failing at the first click.
+
+Original reasoning, unchanged: mpv is chosen for the same reason
 gmusicbrowser eventually added an mpv backend: it already solves gapless, format coverage
 (everything, including exotic and module formats), ReplayGain application, precise seeking, and
 output backend selection (PipeWire/PulseAudio/ALSA/CoreAudio/WASAPI) — problems that are unglamorous
@@ -1436,8 +1469,10 @@ from scope. Milestone test: scan and scroll 50k tracks.
 **M2 — Query engine (2 wk).** Filter AST, both compilation targets, the agreement property test,
 search bar parser, filter panes, filter stack chips.
 
-**M3 — Playback (2 wk).** mpv backend, queue vs playlist, gapless, ReplayGain apply, seekbar and
-transport widgets, MPRIS. Milestone: usable as a daily player.
+**M3 — Playback. ✅ mostly done.** mpv backend over JSON IPC, player with queue vs standing list,
+repeat and shuffle, play and skip counting, ReplayGain application, source selection, transport and
+seek bar, live queue tab, double-click to play. Still outstanding: MPRIS, global media keys,
+crossfade, and verifying gapless against a known-gapless album.
 
 **M3.5 — Song properties (next).** The view described in §6.5: identity and how it was decided,
 every media source with its location and technical detail, raw per-source tags side by side where
