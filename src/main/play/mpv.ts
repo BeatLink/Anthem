@@ -7,7 +7,7 @@
 
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createConnection, type Socket } from 'node:net'
-import { existsSync } from 'node:fs'
+import { existsSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
@@ -30,6 +30,9 @@ interface Pending {
   resolve: (value: unknown) => void
   reject: (err: Error) => void
 }
+
+/** Unique per engine instance: two engines in one process must not share an IPC socket. */
+let instanceCounter = 0
 
 const PROP_POSITION = 1
 const PROP_DURATION = 2
@@ -60,8 +63,13 @@ export class MpvEngine implements PlaybackEngine {
   private swapping = false
 
   constructor(private readonly opts: MpvOptions = {}) {
-    this.socketPath = join(tmpdir(), `anthem-mpv-${process.pid}.sock`)
-    this.ready = this.start()
+    this.socketPath = join(tmpdir(), `anthem-mpv-${process.pid}-${++instanceCounter}.sock`)
+    // A leftover socket file stops mpv binding, so clear it before starting.
+    rmSync(this.socketPath, { force: true })
+    this.ready = this.start().catch((err: Error) => {
+      this.setState('error', err.message)
+      throw err
+    })
   }
 
   private emit: EngineListener = (event, payload) => {
@@ -180,8 +188,12 @@ export class MpvEngine implements PlaybackEngine {
     }
   }
 
-  private command(...args: unknown[]): Promise<unknown> {
-    return this.ready.then(() => new Promise((resolve, reject) => {
+  /**
+   * Writes a command straight to the socket. Used during start-up, where waiting on `ready` would
+   * deadlock: `ready` is the promise that start-up itself resolves.
+   */
+  private send(...args: unknown[]): Promise<unknown> {
+    return new Promise((resolve, reject) => {
       if (!this.socket) {
         reject(new Error('mpv is not connected'))
         return
@@ -189,17 +201,35 @@ export class MpvEngine implements PlaybackEngine {
       const id = this.nextId++
       this.pending.set(id, { resolve, reject })
       this.socket.write(`${JSON.stringify({ command: args, request_id: id })}\n`)
-    }))
+    })
+  }
+
+  /** Waits for start-up before sending, for everything after it. */
+  private command(...args: unknown[]): Promise<unknown> {
+    return this.ready.then(() => this.send(...args))
   }
 
   private async observe(): Promise<void> {
     const interval = this.opts.positionInterval ?? 0.25
-    await this.command('observe_property', PROP_POSITION, 'time-pos')
-    await this.command('observe_property', PROP_DURATION, 'duration')
-    await this.command('observe_property', PROP_PAUSE, 'pause')
-    await this.command('observe_property', PROP_IDLE, 'idle-active')
+    await this.send('observe_property', PROP_POSITION, 'time-pos')
+    await this.send('observe_property', PROP_DURATION, 'duration')
+    await this.send('observe_property', PROP_PAUSE, 'pause')
+    await this.send('observe_property', PROP_IDLE, 'idle-active')
     // mpv reports time-pos on change; this keeps the cadence predictable for the UI.
-    await this.command('set_property', 'options/audio-buffer', String(interval))
+    await this.send('set_property', 'options/audio-buffer', String(interval))
+  }
+
+  /**
+   * mpv 0.38 added an insert-index parameter to loadfile, so the signature is
+   * `loadfile <url> <flags> <index> <options>`. Passing options in the index slot fails with
+   * "invalid parameter", and an empty options string is rejected outright — so the argument list
+   * is built rather than padded.
+   */
+  private loadArgs(uri: string, mode: 'replace' | 'append', opts?: LoadOptions): unknown[] {
+    const flags = this.applyOptions(opts)
+    return flags.length > 0
+      ? ['loadfile', uri, mode, -1, flags.join(',')]
+      : ['loadfile', uri, mode]
   }
 
   private applyOptions(opts?: LoadOptions): string[] {
@@ -220,9 +250,8 @@ export class MpvEngine implements PlaybackEngine {
     this.positionMs = 0
     this.durationMs = null
 
-    const flags = this.applyOptions(opts)
     try {
-      await this.command('loadfile', uri, 'replace', flags.join(','))
+      await this.command(...this.loadArgs(uri, 'replace', opts))
       await this.command('set_property', 'pause', false)
       this.setState('playing')
     } finally {
@@ -232,7 +261,7 @@ export class MpvEngine implements PlaybackEngine {
 
   async preload(uri: string, opts?: LoadOptions): Promise<void> {
     // Appending puts the next file in mpv's own playlist, which is what makes the join gapless.
-    await this.command('loadfile', uri, 'append', this.applyOptions(opts).join(','))
+    await this.command(...this.loadArgs(uri, 'append', opts))
   }
 
   async play(): Promise<void> {
@@ -280,5 +309,6 @@ export class MpvEngine implements PlaybackEngine {
     this.proc?.kill()
     this.proc = null
     this.socket = null
+    rmSync(this.socketPath, { force: true })
   }
 }

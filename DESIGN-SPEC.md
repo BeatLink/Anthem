@@ -1041,6 +1041,26 @@ Decisions worth recording:
 - Shuffle is a seeded permutation, so an order is reproducible and testable; a new pass through a
   shuffled list reseeds rather than repeating the same order.
 
+### 8.0.1 Three defects the fake engine could not have caught
+
+Playback shipped broken, and the fake-engine tests all passed while it was. Worth recording why.
+
+1. **A start-up deadlock.** `command()` waited on a `ready` promise, and the setup commands ran
+   *inside* the function that resolves `ready` — so start-up waited for itself. Every call hung
+   forever rather than failing. Fixed by separating a raw `send()` used during start-up from the
+   gated `command()` used after it.
+2. **The wrong `loadfile` argument slot.** mpv 0.38 added an insert index, making the signature
+   `loadfile <url> <flags> <index> <options>`. Anthem passed its options string where the index
+   goes, which mpv rejects as `invalid parameter`; an empty options string is rejected too, so the
+   argument list has to be built rather than padded.
+3. **A shared IPC socket path.** It was keyed on the process id, so two engines in one process
+   collided — invisible in the app, fatal in tests.
+
+The lesson is not "write more unit tests". It is that **a boundary can only be verified by crossing
+it**: the fake engine proves the player's decisions, and only a real mpv proves the engine. There is
+now an integration test that plays a real file from a real library and asserts the position
+advances, which is what should have existed before playback was called done.
+
 ### 8.1 Engine
 
 A `PlaybackEngine` interface with a default **mpv** implementation, driven over mpv's JSON IPC
