@@ -1141,6 +1141,24 @@ The survivor is one existing track; the others are absorbed and deleted.
 | Playlists | Entries repointed to the survivor, then deduplicated within each playlist. |
 | Identity | Survivor gets `pinned = 1` and `identity_source = 'manual'`, so nothing re-splits it. |
 
+#### 9.4.1.1 Full screen, side by side
+
+Merging is a diff, and a diff needs width. The view is full screen with **one column per source and
+one row per field**, so a disagreement reads as a comparison rather than as a list of options
+detached from what it is being compared against. A trailing *Result* column shows what the survivor
+actually ends up with as choices are made, so the outcome is never inferred.
+
+- Clicking a cell picks that source's value for that field.
+- *Take all from this* resolves every conflict from one source at once, for the common case where
+  one record is simply better, and makes it the survivor.
+- *Only differences* hides the fields that already agree, which on a real merge is most of them.
+- Multi-value fields get a *Keep all* control in the Result column, because union is the default.
+
+Settings uses the same full-screen frame. An earlier iteration made both modal dialogs after a
+full-page settings view stranded a user with no obvious exit — but the problem was the missing exit,
+not the format. The shared `Page` component now owns that: a persistent Close in the header and
+Escape, so no caller can forget.
+
 #### 9.4.2 The preview is the contract
 
 `mergePreview(ids)` returns, for every field, the distinct values across the sources and which

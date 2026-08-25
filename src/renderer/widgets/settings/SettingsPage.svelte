@@ -1,6 +1,7 @@
 <script lang="ts">
   import { ipc } from '../../lib/ipc'
   import { untrack } from 'svelte'
+  import Page from '../../lib/Page.svelte'
   import type { AppInfo, SafetyStatus } from '@shared/ipc'
   import { library } from '../../stores/library.svelte'
   import GmbImport from './GmbImport.svelte'
@@ -63,27 +64,14 @@
   }
 </script>
 
-<svelte:window onkeydown={onKeydown} />
-
-<div class="backdrop">
-  <button class="scrim" aria-label="Close settings" onclick={onclose}></button>
-
-  <div class="settings" role="dialog" aria-modal="true" aria-label="Settings" tabindex="-1">
-  <nav>
-    <div class="title">Settings</div>
+<Page title="Settings" {onclose}>
+  {#snippet nav()}
     {#each sections as s (s.id)}
       <button class:active={section === s.id} onclick={() => (section = s.id)}>{s.label}</button>
     {/each}
-    <span class="grow"></span>
-    <button class="close" onclick={onclose}>Close</button>
-  </nav>
+  {/snippet}
 
-  <div class="pane">
-    <button class="pane-close" onclick={onclose} aria-label="Close settings" title="Close settings">
-      ✕
-    </button>
-
-    {#if section === 'library'}
+  {#if section === 'library'}
       <section>
         <h2>Library</h2>
 
@@ -191,63 +179,13 @@
           <span class="label">Last query</span>
           <code class="sql">{library.lastSql || '—'}</code>
         </div>
-      </section>
-    {/if}
-  </div>
-  </div>
-</div>
+    </section>
+  {/if}
+</Page>
 
 <style>
-  .backdrop {
-    position: absolute;
-    inset: 0;
-    z-index: 10;
-    display: grid;
-    place-items: center;
-    padding: var(--space-6);
-  }
-
-  .scrim {
-    position: absolute;
-    inset: 0;
-    padding: 0;
-    background: var(--surface-overlay);
-    border: 0;
-    cursor: default;
-  }
-
-  .settings { position: relative; }
-
-  .settings {
-    display: grid;
-    grid-template-columns: 180px 1fr;
-    width: min(920px, 100%);
-    height: min(620px, 100%);
-    overflow: hidden;
-    background: var(--surface-default);
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-lg);
-    box-shadow: 0 18px 48px var(--shadow-modal);
-  }
-
-  nav {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
-    padding: var(--space-4) var(--space-3);
-    overflow-y: auto;
-    background: var(--surface-navigation);
-    border-right: 1px solid var(--border-default);
-  }
-
-  .title {
-    padding: 0 var(--space-3) var(--space-3);
-    font-size: var(--font-size-lg);
-    font-weight: 600;
-    color: var(--text-heading);
-  }
-
-  nav button {
+  /* Page owns the frame; these style the section list it renders in its nav slot. */
+  :global(.page nav) button {
     justify-content: flex-start;
     padding: var(--space-2) var(--space-3);
     font: inherit;
@@ -259,34 +197,18 @@
     cursor: pointer;
   }
 
-  nav button:hover { background: var(--surface-navigation-hover); }
-  nav button.active { color: var(--text-on-fill); background: var(--accent); }
+  :global(.page nav) button:hover { background: var(--surface-navigation-hover); }
+  :global(.page nav) button.active { color: var(--text-on-fill); background: var(--accent); }
 
-  .grow { flex: 1; }
-  .close { color: var(--text-tertiary); }
-  .close:hover { color: var(--text-body); }
+  
+  
+  
+  
+  
 
-  .pane { position: relative; overflow-y: auto; padding: var(--space-5) var(--space-6); }
-
-  .pane-close {
-    position: absolute;
-    top: var(--space-4);
-    right: var(--space-4);
-    width: var(--control-height);
-    height: var(--control-height);
-    color: var(--text-tertiary);
-    background: transparent;
-    border: 1px solid transparent;
-    border-radius: var(--radius-md);
-    cursor: pointer;
-  }
-
-  .pane-close:hover {
-    color: var(--text-body);
-    background: var(--surface-secondary);
-    border-color: var(--border-default);
-  }
-
+      
+  
+  
   section { display: grid; gap: var(--space-4); max-width: 80ch; }
   h2 { margin: 0; font-size: var(--font-size-lg); color: var(--text-heading); }
 

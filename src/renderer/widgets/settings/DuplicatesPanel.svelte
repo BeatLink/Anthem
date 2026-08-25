@@ -1,7 +1,7 @@
 <script lang="ts">
   import { ipc } from '../../lib/ipc'
   import type { DuplicateGroup, DuplicateReason } from '@shared/ipc'
-  import MergeDialog from '../MergeDialog.svelte'
+  import MergeView from '../MergeView.svelte'
   import { library } from '../../stores/library.svelte'
 
   let groups = $state<DuplicateGroup[]>([])
@@ -129,7 +129,7 @@
 </section>
 
 {#if merging}
-  <MergeDialog
+  <MergeView
     ids={merging}
     onclose={(merged) => {
       merging = null

@@ -2,7 +2,7 @@
   import { library } from '../stores/library.svelte'
   import { field } from '@shared/fields'
   import Stars from './Stars.svelte'
-  import MergeDialog from './MergeDialog.svelte'
+  import MergeView from './MergeView.svelte'
 
   let merging = $state<number[] | null>(null)
 
@@ -120,7 +120,7 @@
 </section>
 
 {#if merging}
-  <MergeDialog
+  <MergeView
     ids={merging}
     onclose={(merged) => {
       merging = null
