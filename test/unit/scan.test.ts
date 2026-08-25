@@ -135,12 +135,45 @@ describe('scanning', () => {
   })
 
   it('records unreadable files as errors instead of aborting the scan', async () => {
-    await writeFile(join(dir, 'broken.flac'), Buffer.from('fLaC not really'))
+    await writeFile(join(dir, 'broken.flac'), Buffer.from('this is definitely not audio at all'))
     await writeFile(join(dir, 'fine.flac'), flac('f'.repeat(32), Buffer.alloc(512, 9)))
 
     const report = await scanRoots(db as never, [dir])
     expect(report.filesFound).toBe(2)
     expect(report.errors.length + report.filesRead).toBe(2)
+  })
+
+  it('reports an outcome for every file it touches', async () => {
+    await writeFile(join(dir, 'a.flac'), flac('3'.repeat(32), Buffer.alloc(512, 20)))
+    // A file with no valid preamble is what actually fails to parse; a truncated-but-signed file
+    // is tolerated by music-metadata and indexed with empty tags.
+    await writeFile(join(dir, 'bad.flac'), Buffer.from('this is definitely not audio at all'))
+
+    const seen: { path: string; outcome: string }[] = []
+    const first = await scanRoots(db as never, [dir], { onFile: (r) => seen.push(r) })
+
+    expect(seen).toHaveLength(first.filesFound)
+    expect(seen.map((s) => s.outcome).sort()).toEqual(['error', 'new'])
+  })
+
+  it('labels a rescan unchanged, a move moved, and a deletion missing', async () => {
+    const md5 = '4'.repeat(32)
+    await writeFile(join(dir, 'one.flac'), flac(md5, Buffer.alloc(512, 21)))
+    await scanRoots(db as never, [dir])
+
+    let seen: { path: string; outcome: string }[] = []
+    await scanRoots(db as never, [dir], { onFile: (r) => seen.push(r) })
+    expect(seen.map((s) => s.outcome)).toEqual(['unchanged'])
+
+    await rename(join(dir, 'one.flac'), join(dir, 'two.flac'))
+    seen = []
+    await scanRoots(db as never, [dir], { onFile: (r) => seen.push(r) })
+    expect(seen.find((s) => s.outcome === 'moved')).toBeDefined()
+
+    await rm(join(dir, 'two.flac'))
+    seen = []
+    await scanRoots(db as never, [dir], { onFile: (r) => seen.push(r) })
+    expect(seen.map((s) => s.outcome)).toContain('missing')
   })
 
   it('reports progress as it goes', async () => {

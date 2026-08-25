@@ -86,6 +86,15 @@ export interface ScanProgress {
   currentPath?: string
 }
 
+export type FileOutcome = 'new' | 'matched' | 'moved' | 'unchanged' | 'error' | 'missing'
+
+export interface FileResult {
+  path: string
+  outcome: FileOutcome
+  detail?: string
+  trackId?: number
+}
+
 export interface ScanReport {
   filesFound: number
   filesRead: number
@@ -131,6 +140,8 @@ export interface AnthemApi {
 /** Pushed from the main process; the renderer subscribes rather than polling. */
 export interface AnthemEvents {
   'scan:progress': ScanProgress
+  /** Batched, because one message per file would flood the bridge on a large library. */
+  'scan:files': FileResult[]
   'scan:done': ScanReport
 }
 

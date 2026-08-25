@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import type { Root, ScanProgress, ScanReport } from '@shared/ipc'
+  import type { FileOutcome, FileResult, Root, ScanProgress, ScanReport } from '@shared/ipc'
   import { library } from '../../stores/library.svelte'
+  import { virtualWindow } from '@shared/view'
 
   let roots = $state<Root[]>([])
   let progress = $state<ScanProgress | null>(null)
@@ -9,16 +10,54 @@
   let error = $state<string | null>(null)
   let scanning = $state(false)
 
+  // Every file's outcome is kept; the table renders only the rows in view.
+  let results = $state<FileResult[]>([])
+  let filter = $state<FileOutcome | 'all'>('all')
+  let follow = $state(true)
+  let scrollTop = $state(0)
+  let viewport = $state(320)
+  let body = $state<HTMLElement | null>(null)
+
+  const ROW = 24
+
+  const OUTCOMES: { id: FileOutcome; label: string }[] = [
+    { id: 'new', label: 'New' },
+    { id: 'matched', label: 'Matched' },
+    { id: 'moved', label: 'Moved' },
+    { id: 'unchanged', label: 'Unchanged' },
+    { id: 'missing', label: 'Missing' },
+    { id: 'error', label: 'Failed' }
+  ]
+
+  const tally = $derived.by(() => {
+    const t: Record<string, number> = {}
+    for (const r of results) t[r.outcome] = (t[r.outcome] ?? 0) + 1
+    return t
+  })
+
+  const shown = $derived(filter === 'all' ? results : results.filter((r) => r.outcome === filter))
+  const win = $derived(virtualWindow(shown.length, ROW, scrollTop, viewport))
+  const slice = $derived(shown.slice(win.start, win.end))
+
+  $effect(() => {
+    // Following the tail is only helpful while rows are still arriving.
+    void results.length
+    if (follow && scanning && body) body.scrollTop = body.scrollHeight
+  })
+
   onMount(() => {
     void load()
     const offProgress = window.anthemEvents.on('scan:progress', (p) => (progress = p))
+    const offFiles = window.anthemEvents.on('scan:files', (batch) => {
+      results = [...results, ...batch]
+    })
     const offDone = window.anthemEvents.on('scan:done', (r) => {
       report = r
       progress = null
       scanning = false
       void library.refresh()
     })
-    return () => { offProgress(); offDone() }
+    return () => { offProgress(); offFiles(); offDone() }
   })
 
   async function load(): Promise<void> {
@@ -47,6 +86,9 @@
   async function scan(): Promise<void> {
     error = null
     report = null
+    results = []
+    filter = 'all'
+    follow = true
     scanning = true
     try {
       await window.anthem['library:scan']()
@@ -68,7 +110,7 @@
   )
 
   const short = (p: string | undefined): string =>
-    p ? (p.length > 64 ? `…${p.slice(-63)}` : p) : ''
+    p ? (p.length > 72 ? `…${p.slice(-71)}` : p) : ''
 
   const seconds = (ms: number): string => `${(ms / 1000).toFixed(1)}s`
 </script>
@@ -117,8 +159,52 @@
           Checking for files that disappeared…
         {:else}
           {progress.processed.toLocaleString()} / {progress.found.toLocaleString()}
-          <span class="path">{short(progress.currentPath)}</span>
         {/if}
+      </div>
+    </div>
+  {/if}
+
+  {#if results.length > 0}
+    <div class="results">
+      <div class="filters">
+        <button class:sel={filter === 'all'} onclick={() => (filter = 'all')}>
+          All <span class="n">{results.length.toLocaleString()}</span>
+        </button>
+        {#each OUTCOMES as o (o.id)}
+          {#if tally[o.id]}
+            <button class="{o.id}" class:sel={filter === o.id} onclick={() => (filter = o.id)}>
+              {o.label} <span class="n">{tally[o.id]!.toLocaleString()}</span>
+            </button>
+          {/if}
+        {/each}
+        <span class="grow"></span>
+        <label class="follow">
+          <input type="checkbox" bind:checked={follow} disabled={!scanning} /> Follow
+        </label>
+      </div>
+
+      <div
+        class="body"
+        bind:this={body}
+        bind:clientHeight={viewport}
+        onscroll={(e) => {
+          scrollTop = e.currentTarget.scrollTop
+          // Scrolling up by hand means the user wants to read, not chase the tail.
+          if (scanning && e.currentTarget.scrollTop + e.currentTarget.clientHeight
+              < e.currentTarget.scrollHeight - 8) follow = false
+        }}
+      >
+        <div class="spacer" style:height="{win.totalPx}px">
+          <div class="rows" style:transform="translateY({win.offsetPx}px)">
+            {#each slice as r, i (win.start + i)}
+              <div class="row" style:height="{ROW}px">
+                <span class="badge {r.outcome}">{r.outcome}</span>
+                <span class="file" title={r.path}>{short(r.path)}</span>
+                <span class="why">{r.detail ?? ''}</span>
+              </div>
+            {/each}
+          </div>
+        </div>
       </div>
     </div>
   {/if}
@@ -215,7 +301,100 @@
   }
 
   .detail { display: flex; gap: var(--space-3); font-size: var(--font-size-sm); color: var(--text-tertiary); }
-  .path { font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .results {
+    display: grid;
+    grid-template-rows: auto 1fr;
+    min-height: 0;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+  }
+
+  .filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    align-items: center;
+    padding: var(--space-2) var(--space-3);
+    background: var(--column-header);
+    border-bottom: 1px solid var(--border-default);
+  }
+
+  .filters button {
+    height: var(--control-height-sm);
+    padding: 0 var(--space-3);
+    font-size: var(--font-size-sm);
+    color: var(--text-secondary);
+    background: transparent;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-full);
+    cursor: pointer;
+  }
+
+  .filters button.sel {
+    color: var(--text-on-fill);
+    background: var(--accent);
+    border-color: transparent;
+  }
+
+  .filters .n { font-variant-numeric: tabular-nums; opacity: 0.75; }
+  .grow { flex: 1; }
+
+  .follow {
+    display: flex;
+    gap: var(--space-2);
+    align-items: center;
+    font-size: var(--font-size-sm);
+    color: var(--text-tertiary);
+  }
+
+  .body { height: 320px; overflow-y: auto; }
+  .spacer { position: relative; }
+  .rows { position: absolute; inset-inline: 0; top: 0; will-change: transform; }
+
+  .row {
+    display: grid;
+    grid-template-columns: 76px 1fr 180px;
+    gap: var(--space-3);
+    align-items: center;
+    padding: 0 var(--space-3);
+    font-size: var(--font-size-sm);
+  }
+
+  .row:hover { background: var(--row-hover); }
+
+  .badge {
+    justify-self: start;
+    padding: 1px var(--space-2);
+    font-size: 11px;
+    text-transform: capitalize;
+    border-radius: var(--radius-full);
+    color: var(--text-secondary);
+    background: var(--surface-secondary);
+  }
+
+  .badge.new { color: var(--status-success); background: color-mix(in srgb, var(--status-success) 14%, transparent); }
+  .badge.moved { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+  .badge.error { color: var(--status-danger); background: color-mix(in srgb, var(--status-danger) 14%, transparent); }
+  .badge.missing { color: var(--status-warning-text); background: color-mix(in srgb, var(--status-warning) 16%, transparent); }
+
+  .file {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--font-mono);
+    color: var(--text-body);
+  }
+
+  .why {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-tertiary);
+  }
 
   .note { margin: 0; font-size: var(--font-size-sm); color: var(--text-tertiary); }
   .note.warn { color: var(--status-warning-text); }

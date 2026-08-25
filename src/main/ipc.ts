@@ -10,7 +10,9 @@ import { safetyStatus } from './safety'
 import { defaultGmbrcPath, parseGmbrc } from './import/gmbrc'
 import { importGmbrc } from './import/gmb-import'
 import { scanRoots } from './library/scan'
-import { EVENT_CHANNEL, type AnthemEvents, type EventName, type Root } from '@shared/ipc'
+import {
+  EVENT_CHANNEL, type AnthemEvents, type EventName, type FileResult, type Root
+} from '@shared/ipc'
 
 // Album lives on the albums table and artist in track_values, so the row projection has to
 // resolve both rather than reading columns that no longer exist on tracks.
@@ -154,11 +156,25 @@ export function registerIpc(db: DB): void {
         if (roots.length === 0) throw new Error('no music folders configured')
 
         scanning = { aborted: false }
+
+        // One IPC message per file would flood the bridge; flush in batches instead.
+        let pending: FileResult[] = []
+        const flush = (): void => {
+          if (pending.length === 0) return
+          emit('scan:files', pending)
+          pending = []
+        }
+
         try {
           const report = await scanRoots(db as never, roots, {
             signal: scanning,
-            onProgress: (p) => emit('scan:progress', p)
+            onProgress: (p) => emit('scan:progress', p),
+            onFile: (r) => {
+              pending.push(r)
+              if (pending.length >= 40) flush()
+            }
           })
+          flush()
           db.prepare('UPDATE roots SET last_scan = ? WHERE enabled = 1').run(Date.now())
           emit('scan:done', report)
           return report as never

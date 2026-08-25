@@ -534,6 +534,70 @@ A smart playlist = filter AST + sort spec + optional limit + refresh policy.
   "weight": "(rating ?? 50) * pow(0.5, days_since(last_played) < 30 ? 2 : 0)" }
 ```
 
+### 4.3.1 Multi-key sort, and sorting as a way to build a playlist
+
+**The mechanism exists today.** `SortState` in `shared/view.ts` holds an ordered list of sort keys,
+shift-clicking a column header appends one rather than replacing it, and the header shows its
+position in the order. `compileFilter` emits every key into the `ORDER BY`, with NULLs last in both
+directions. Sorting by album, then disc, then track is the default view.
+
+What follows is the part still to build.
+
+#### 4.3.1.1 Sort as a first-class, editable object
+
+Column-clicking is fine for two keys and awkward for four. The sort order should also be editable
+directly: a small panel listing the active keys in order, each row draggable, with a direction
+toggle and a remove control, plus an add-key picker over every sortable field. The same object is
+what a layout document already stores (§5.1) and what a smart playlist already carries (§4.3), so
+this is one editor serving three places.
+
+```jsonc
+"sort": [
+  { "field": "rating",      "dir": "desc" },
+  { "field": "play_count",  "dir": "desc" },
+  { "field": "last_played", "dir": "asc" },
+  { "field": "album" }, { "field": "disc_number" }, { "field": "track_number" }
+]
+```
+
+#### 4.3.1.2 Sorting into a smart playlist
+
+This is the useful idea, and it is nearly free. A smart playlist is already *filter + sort + limit*
+(§4.3), and a browse state is already a filter AST (§6.3). So **"save this view as a smart
+playlist"** needs no new query machinery — it serializes what the user is already looking at:
+
+> Filter panes narrowed to `genre: Jazz`, sorted by rating desc then last-played asc, limited to
+> 100 tracks → *"Best jazz I haven't heard lately"*, live-refreshing.
+
+The button belongs next to the sort editor and next to the filter stack, because from the user's
+point of view those two together *are* the playlist definition. The limit is the only field the
+dialog has to ask for, and `by: "duration"` makes "two hours of this" a one-click playlist.
+
+Design notes that matter:
+
+- **A limit without a sort is a bug**, not a feature: "100 tracks" from an unordered set is
+  arbitrary and changes between runs. The dialog should require a sort, defaulting to the current
+  one, and offer `random` explicitly when arbitrary really is what is wanted.
+- **Sort direction carries meaning for NULLs.** "Least recently played" must include never-played
+  tracks, and Anthem's NULLs-last rule puts them at the wrong end. The sort editor needs a
+  per-key *nulls first / last* choice before this feature is honest.
+- `weighted_random` (§4.3) is a sort key like any other, so the same editor produces gmusicbrowser's
+  best shuffle behaviour without a separate UI.
+
+#### 4.3.1.3 Grouping is the same object
+
+The SongTree's grouping (§6.1) is a prefix of the sort: grouping by album *is* sorting by album
+first. Treating them as one thing means "group by artist, then album, then sort by track" is
+expressible without a second concept, and a grouped view saves to a playlist identically.
+
+#### 4.3.1.4 What is needed
+
+1. Per-key `nulls: 'first' | 'last'` in `SortKey`, honoured by `compileFilter` and `evaluate`.
+2. A sort editor component driven by `SortState`, with drag reordering.
+3. `saveAsSmartPlaylist(filter, sort, limit, name)` plus its IPC channel and dialog.
+4. Tests: multi-key ordering against real data, NULL placement in both directions, and a round-trip
+   asserting a saved playlist returns exactly the rows the view showed.
+
 ### 4.4 The search bar
 
 A single input parses a "smart string" into an AST — gmusicbrowser's `smartfilter` idea, generalized:
