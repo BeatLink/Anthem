@@ -75,6 +75,27 @@ otherwise makes Electron run as bare node and die on the ESM entry point.
 Benchmarks default to 50k synthetic tracks (the §12 target); `ANTHEM_BENCH_SIZE=20000 npm run bench`
 for a quicker pass. Point the app at a scratch database with `ANTHEM_DB=/tmp/anthem.db`.
 
+### Logging
+
+Configured entirely by environment, so detail can be turned on without a rebuild.
+
+```sh
+ANTHEM_LOG=debug npm run app              # everything
+ANTHEM_LOG=warn,play:debug npm run app    # quiet, except playback
+ANTHEM_LOG_FILE=/tmp/anthem.log npm run app
+```
+
+Levels are `critical`, `error`, `warn`, `info` (default) and `debug`; `warning`, `err`, `verbose`
+and `trace` are accepted as aliases. A scope can be raised or lowered on its own with
+`scope:level`, and `*:level` sets the default. Scopes in use: `app`, `play`, and `ui:*` for anything
+originating in the renderer.
+
+**Renderer records go to the same stream**, forwarded to the main process, so a UI failure is
+visible from the terminal rather than trapped in a devtools console nobody has open. Uncaught errors
+and unhandled rejections are reported automatically.
+
+A malformed `ANTHEM_LOG` falls back to the default rather than silencing logging.
+
 ### Read-only by default
 
 Anthem starts read-only and `npm run app` pins it with `ANTHEM_FORCE_READ_ONLY=1`. Every

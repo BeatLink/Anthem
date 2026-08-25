@@ -129,6 +129,27 @@ rather than touching `window.anthem` directly.
 The symptom is easy to misread: the handler never runs, so nothing appears in the main process log,
 which looks like a return-value problem rather than an argument one.
 
+### 2.3.1 Logging
+
+Levels are `critical`, `error`, `warn`, `info` and `debug`, configured by `ANTHEM_LOG` — either a
+bare level, or per-scope entries such as `warn,play:debug` so one area can be made noisy while the
+rest stays quiet. `ANTHEM_LOG_FILE` additionally appends to a file.
+
+Two decisions worth recording:
+
+- **Renderer records travel to the main process** and join the same stream, in order, under one
+  configuration. A renderer-only console is invisible from a terminal, and that is precisely what
+  turned several UI bugs into guesswork; uncaught errors and unhandled rejections are forwarded
+  automatically.
+- **The level is read through a function, not captured.** The renderer learns its level from the
+  main process *after* module load, so a logger created at import time would otherwise be stuck at
+  the default forever — which is exactly the bug that made the first version silently drop every
+  renderer debug line.
+
+The parsing lives in `src/shared/log.ts`, apart from any transport, because the behaviour worth
+testing is what a malformed specification does: it falls back rather than silencing logging, and one
+bad entry does not discard the rest.
+
 ### 2.4 The UI-agnostic boundary
 
 The single most valuable structural decision in the codebase: **anything expensive to rewrite lives

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { ipc } from './lib/ipc'
+  import { configureLogging, log } from './lib/log'
   import { onMount } from 'svelte'
   import type { AppInfo, SafetyStatus } from '@shared/ipc'
   import { library } from './stores/library.svelte'
@@ -24,9 +25,10 @@
   onMount(() => {
     // Renderer failures are invisible from the terminal otherwise, which turns UI bugs into
     // guesswork. Forwarding them to the main log is cheap and always on.
-    const onError = (e: ErrorEvent): void => void ipc('app:log', `error: ${e.message}`)
+    const onError = (e: ErrorEvent): void =>
+      log.error(e.message, { source: e.filename, line: e.lineno })
     const onRejection = (e: PromiseRejectionEvent): void =>
-      void ipc('app:log', `unhandled: ${String(e.reason)}`)
+      log.error('unhandled rejection', { reason: String(e.reason) })
     window.addEventListener('error', onError)
     window.addEventListener('unhandledrejection', onRejection)
 
@@ -41,6 +43,8 @@
   })
 
   async function boot(): Promise<void> {
+    configureLogging((await ipc('app:logConfig')).spec)
+    log.debug('renderer booting')
     info = await ipc('app:info')
     safety = await ipc('app:safety')
     await library.refresh()

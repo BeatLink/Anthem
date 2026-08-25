@@ -13,6 +13,7 @@ import { scanRoots } from './library/scan'
 import { mergePreview, mergeTracks, unmerge } from './library/merge'
 import { findDuplicates } from './library/duplicates'
 import { trackDetails } from './library/details'
+import { logFromRenderer, logger } from './log'
 import { Player } from './play/player'
 import { MpvEngine, findMpv } from './play/mpv'
 import { NullEngine } from './play/engine'
@@ -42,12 +43,16 @@ export function registerIpc(db: DB): void {
 
   // Without mpv the app still runs and the library still works; only audio is unavailable, and the
   // player reports that plainly rather than failing at the first click.
+  const playLog = logger('play')
   const mpvPath = findMpv()
-  if (!mpvPath) console.warn('anthem: mpv not found; playback disabled (set ANTHEM_MPV)')
+  if (!mpvPath) playLog.warn('mpv not found; playback is disabled', { hint: 'set ANTHEM_MPV' })
+  else playLog.info('using mpv', { path: mpvPath })
 
   const player = new Player(
     db as never,
-    mpvPath ? new MpvEngine({ binary: mpvPath }) : new NullEngine(),
+    mpvPath
+      ? new MpvEngine({ binary: mpvPath, onLog: (line) => playLog.debug(`mpv: ${line}`) })
+      : new NullEngine(),
     { replayGain: 'track' }
   )
 
@@ -207,10 +212,12 @@ export function registerIpc(db: DB): void {
       return run as never
     })(),
 
-    'app:log': (message) => {
-      console.error(`renderer: ${message}`)
+    'app:log': (record) => {
+      logFromRenderer(record.level, record.scope, record.message, record.data)
       return { logged: true }
     },
+
+    'app:logConfig': () => ({ spec: process.env.ANTHEM_LOG }),
 
     'tracks:details': (trackId) => trackDetails(db as never, trackId) as never,
 

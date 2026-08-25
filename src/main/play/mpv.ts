@@ -41,6 +41,8 @@ const PROP_IDLE = 4
 
 export interface MpvOptions {
   binary?: string
+  /** Receives mpv's own diagnostics, which are otherwise discarded. */
+  onLog?: (line: string) => void
   /** How often mpv reports position, in seconds. The UI interpolates between ticks. */
   positionInterval?: number
   extraArgs?: readonly string[]
@@ -89,13 +91,21 @@ export class MpvEngine implements PlaybackEngine {
     this.proc = spawn(binary, [
       '--idle=yes',
       '--no-video',
-      '--no-terminal',
       '--gapless-audio=yes',
       '--keep-open=no',
       '--audio-display=no',
+      // Without this mpv's diagnostics go nowhere, which makes a failed load unexplainable.
+      '--msg-level=all=warn',
       `--input-ipc-server=${this.socketPath}`,
       ...(this.opts.extraArgs ?? [])
-    ], { stdio: 'ignore' })
+    ], { stdio: ['ignore', 'ignore', 'pipe'] })
+
+    this.proc.stderr?.setEncoding('utf8')
+    this.proc.stderr?.on('data', (chunk: string) => {
+      for (const line of chunk.split('\n')) {
+        if (line.trim() !== '') this.opts.onLog?.(line.trim())
+      }
+    })
 
     this.proc.on('exit', (code) => {
       this.socket = null
@@ -184,7 +194,9 @@ export class MpvEngine implements PlaybackEngine {
     }
 
     if (message.event === 'end-file' && message.reason === 'error') {
-      this.setState('error', String(message.file_error ?? 'playback failed'))
+      const detail = String(message.file_error ?? 'playback failed')
+      this.opts.onLog?.(`end-file error: ${JSON.stringify(message)}`)
+      this.setState('error', detail)
     }
   }
 
