@@ -303,6 +303,9 @@ export interface AnthemApi {
   }) => { logged: boolean }
   'app:logConfig': () => { spec: string | undefined }
   'tracks:details': (trackId: number) => TrackDetails | null
+  /** Resolves cover art lazily; returns an anthem-art:// url, or null when there is none. */
+  'art:forTrack': (trackId: number) => { url: string | null; source: string }
+  'art:rescan': () => { forgotten: number }
   'tracks:reveal': (uri: string) => { revealed: boolean }
   'player:status': () => PlayerStatus
   'player:playTrack': (req: { trackId: number; context?: number[]; index?: number }) => PlayerStatus
@@ -366,6 +369,7 @@ export const CHANNELS: readonly Channel[] = [
   'library:roots', 'library:addRoot', 'library:removeRoot', 'library:scan', 'library:scanCancel',
   'tracks:mergePreview', 'tracks:merge', 'tracks:unmerge', 'tracks:duplicates',
   'app:log', 'app:logConfig', 'tracks:details', 'tracks:reveal',
+  'art:forTrack', 'art:rescan',
   'player:status', 'player:playTrack', 'player:toggle', 'player:next', 'player:previous',
   'player:stop', 'player:seek', 'player:volume', 'player:enqueue', 'player:dequeue',
   'player:clearQueue', 'player:repeat', 'player:shuffle'

@@ -7,6 +7,7 @@
   import { ipc } from '../lib/ipc'
   import Page from '../lib/Page.svelte'
   import Stars from './Stars.svelte'
+  import Cover from './Cover.svelte'
 
   let { trackId, onclose }: { trackId: number; onclose?: () => void } = $props()
 
@@ -90,7 +91,22 @@
     <p class="note">Loading…</p>
   {:else if section === 'overview'}
     <section>
-      <h2>Metadata</h2>
+      <div class="hero">
+        <Cover trackId={details.id} size={160} />
+        <div>
+          <h2 class="first">Metadata</h2>
+          <dl>
+            {#each details.fields.slice(0, 4) as f (f.field)}
+              {#if f.value !== null}
+                <dt>{f.name}</dt>
+                <dd>{f.field === 'length' ? mmss(Number(f.value)) : f.value}</dd>
+              {/if}
+            {/each}
+          </dl>
+        </div>
+      </div>
+
+      <h2>All metadata</h2>
       <dl>
         {#each details.fields as f (f.field)}
           {#if f.value !== null}
@@ -254,6 +270,9 @@
 
 <style>
   section { display: grid; gap: var(--space-2); max-width: 90ch; }
+
+  .hero { display: grid; grid-template-columns: auto 1fr; gap: var(--space-5); align-items: start; }
+  .first { margin-top: 0; }
 
   h2 {
     margin: var(--space-5) 0 var(--space-1);

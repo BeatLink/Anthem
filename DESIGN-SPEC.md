@@ -1039,12 +1039,37 @@ gains its strongest signal (§3.5.0). The scanner already reads the tag; nothing
 - Album-level operations: set album artist from most common artist, mark as compilation, fix disc
   numbering, embed cover art in all tracks.
 
-### 7.3 Artwork
+### 7.3 Artwork — implemented
 
-- Sources in priority order: embedded picture → folder image (`cover.*`, `folder.*`, `front.*`,
-  configurable) → cached remote fetch (plugin) → generated placeholder from the album's colour hash.
-- Cache: content-addressed thumbnails at 64/128/256/512 px in `~/.cache/anthem/art/`, WebP.
-- Multiple image types supported per ID3v2 spec (front, back, artist, media, booklet).
+`src/main/library/artwork.ts`. Sources in priority order: **embedded picture → folder image**. A
+remote fetch is a later plugin (§11).
+
+- **Art belongs to the album where there is one, and to the track otherwise**, so every track on an
+  album shares one lookup and a loose single still gets a cover.
+- **Resolution is lazy.** Nothing is extracted until something wants to display it, which keeps a
+  scan fast and avoids decoding images nobody will see.
+- **A miss is recorded**, with source `none`. Without that, a coverless track would be searched —
+  folder listing included — on every single play. `art:rescan` clears only the misses, so a newly
+  added cover is picked up without discarding real entries.
+- **The cache is content addressed** by the image's own hash, so an album art file duplicated across
+  a hundred folders is stored once.
+- **Folder matching is deliberately loose**: `cover`, `folder`, `front`, `album`, `albumart`,
+  `thumb`, `artwork`, any case, any image extension. A folder holding exactly one image is taken as
+  the cover; a folder holding several unnamed images is not guessed at.
+- Image dimensions are read from the file header rather than by decoding, so knowing the size costs
+  nothing.
+
+**Serving it to the renderer** needed its own scheme. The renderer runs under a strict CSP and
+cannot load `file://`, so cached art is served over `anthem-art://`, registered as a privileged
+scheme and restricted to paths inside the cache directory — a url pointing anywhere else is refused
+rather than read.
+
+Still to do: thumbnail sizes (currently the original is served at whatever size it was found),
+artist images, and the remote fetch.
+
+**Measured on a real 5,079-track library:** 5 of a 25-track sample carried embedded art. That
+library is organised into folders by rating rather than by album, so the folder-image fallback finds
+nothing — which is a fair illustration of why embedded art is tried first.
 
 ### 7.4 Stats sync
 

@@ -13,7 +13,8 @@ export type TestDb = InstanceType<typeof DatabaseSync>
 const MIGRATIONS = [
   'src/main/db/migrations/001-initial.sql',
   'src/main/db/migrations/002-history-unique.sql',
-  'src/main/db/migrations/003-merge-journal.sql'
+  'src/main/db/migrations/003-merge-journal.sql',
+  'src/main/db/migrations/004-artwork.sql'
 ].map((p) => join(process.cwd(), p))
 
 export function freshDb(): TestDb {

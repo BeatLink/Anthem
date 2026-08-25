@@ -2,22 +2,18 @@
 // already covered by the fake engine and a failure here would be invisible to those tests.
 
 import { describe, expect, it } from 'vitest'
-import { existsSync, copyFileSync } from 'node:fs'
-import { homedir, tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { existsSync } from 'node:fs'
 import { DatabaseSync } from 'node:sqlite'
+import { copyLiveLibrary, hasLiveLibrary } from '../helpers/live'
 
 import { MpvEngine, findMpv } from '@main/play/mpv'
 import { Player } from '@main/play/player'
 
-const live = join(homedir(), '.config/anthem/library.db')
 const mpv = findMpv() ?? undefined
 
-describe.runIf(existsSync(live) && mpv)('playback against the real library', () => {
+describe.runIf(hasLiveLibrary() && mpv)('playback against the real library', () => {
   it('loads a real track and the position advances', async () => {
-    const copy = join(tmpdir(), 'anthem-play-check.db')
-    copyFileSync(live, copy)
-    const db = new DatabaseSync(copy)
+    const db = new DatabaseSync(copyLiveLibrary('anthem-play-check.db'))
 
     const row = db.prepare(`
       SELECT t.id, t.title, m.uri, COUNT(m.id) AS files
@@ -66,8 +62,7 @@ describe.runIf(existsSync(live) && mpv)('playback against the real library', () 
     // resolves. A timeout rather than a hang is the point of this assertion.
     await engine.setVolume(0)
 
-    const copy = join(tmpdir(), 'anthem-play-check.db')
-    const db = new DatabaseSync(copy)
+    const db = new DatabaseSync(copyLiveLibrary('anthem-play-check.db'))
     const uri = (db.prepare('SELECT uri FROM media WHERE present = 1 LIMIT 1').get() as
       { uri: string }).uri
 

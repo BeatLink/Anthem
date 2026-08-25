@@ -4,6 +4,7 @@
   import { player } from '../stores/player.svelte'
   import Stars from './Stars.svelte'
   import VolumeButton from './VolumeButton.svelte'
+  import Cover from './Cover.svelte'
 
   const mmss = (ms: number | null | undefined): string => {
     if (ms === null || ms === undefined || !Number.isFinite(ms)) return '0:00'
@@ -101,7 +102,7 @@
       </div>
     </div>
 
-    <div class="cover" aria-hidden="true"></div>
+    <Cover trackId={track?.id ?? null} size={88} />
   </div>
 </section>
 
@@ -170,14 +171,6 @@
   }
 
   input[type='range'] { width: 100%; accent-color: var(--media-progress); }
-
-  .cover {
-    width: 88px;
-    height: 88px;
-    background: var(--surface-secondary);
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-sm);
-  }
 
   .spacer { flex: 1; }
 </style>

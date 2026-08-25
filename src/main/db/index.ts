@@ -9,13 +9,15 @@ import { app } from 'electron'
 import initial from './migrations/001-initial.sql?raw'
 import historyUnique from './migrations/002-history-unique.sql?raw'
 import mergeJournal from './migrations/003-merge-journal.sql?raw'
+import artwork from './migrations/004-artwork.sql?raw'
 
 export type DB = Database.Database
 
 const MIGRATIONS: readonly { version: number; sql: string }[] = [
   { version: 1, sql: initial },
   { version: 2, sql: historyUnique },
-  { version: 3, sql: mergeJournal }
+  { version: 3, sql: mergeJournal },
+  { version: 4, sql: artwork }
 ]
 
 export function libraryPath(): string {

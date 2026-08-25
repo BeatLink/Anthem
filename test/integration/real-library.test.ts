@@ -2,22 +2,16 @@
 // finder and merge preview behave on real data rather than only on fixtures.
 
 import { describe, expect, it } from 'vitest'
-import { existsSync, copyFileSync } from 'node:fs'
-import { homedir, tmpdir } from 'node:os'
-import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
+import { copyLiveLibrary, hasLiveLibrary } from '../helpers/live'
 
 import { findDuplicates } from '@main/library/duplicates'
 import { mergePreview } from '@main/library/merge'
 
-const live = join(homedir(), '.config/anthem/library.db')
-
-describe.runIf(existsSync(live))('against the real library on this machine', () => {
+describe.runIf(hasLiveLibrary())('against the real library on this machine', () => {
   it('finds duplicates and previews a merge without throwing', () => {
     // Copy first: this test must never touch the live database.
-    const copy = join(tmpdir(), 'anthem-real-check.db')
-    copyFileSync(live, copy)
-    const db = new DatabaseSync(copy)
+    const db = new DatabaseSync(copyLiveLibrary('anthem-real-check.db'))
 
     const total = (db.prepare('SELECT COUNT(*) AS n FROM tracks').get() as { n: number }).n
     expect(total).toBeGreaterThan(0)

@@ -13,6 +13,8 @@ import { scanRoots } from './library/scan'
 import { mergePreview, mergeTracks, unmerge } from './library/merge'
 import { findDuplicates } from './library/duplicates'
 import { trackDetails } from './library/details'
+import { forgetMisses, resolveArtwork } from './library/artwork'
+import { artCacheDir } from './artcache'
 import { logFromRenderer, logger } from './log'
 import { Player } from './play/player'
 import { MpvEngine, findMpv } from './play/mpv'
@@ -220,6 +222,16 @@ export function registerIpc(db: DB): void {
     'app:logConfig': () => ({ spec: process.env.ANTHEM_LOG }),
 
     'tracks:details': (trackId) => trackDetails(db as never, trackId) as never,
+
+    'art:forTrack': (async (trackId: number) => {
+      const art = await resolveArtwork(db as never, trackId, { cacheDir: artCacheDir() })
+      return {
+        url: art.path ? `anthem-art://local${encodeURI(art.path)}` : null,
+        source: art.source
+      }
+    }) as never,
+
+    'art:rescan': () => ({ forgotten: forgetMisses(db as never) }),
 
     'tracks:reveal': (uri) => {
       // Showing a file is a read; it does not need the write guard.

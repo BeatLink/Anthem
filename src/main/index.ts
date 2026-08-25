@@ -1,10 +1,12 @@
-import { app, BrowserWindow, nativeTheme, shell } from 'electron'
+import { app, BrowserWindow, nativeTheme, protocol, shell, net } from 'electron'
+import { pathToFileURL } from 'node:url'
 import { join } from 'node:path'
 
 import { openLibrary, libraryPath } from './db'
 import { registerIpc } from './ipc'
 import { initSafety, safetyStatus } from './safety'
 import { describeLogging, log } from './log'
+import { artCacheDir } from './artcache'
 
 const isDev = !app.isPackaged
 
@@ -45,6 +47,13 @@ function createWindow(): BrowserWindow {
   return win
 }
 
+// Cached covers cannot be served over file:// under the renderer's CSP, so they get their own
+// scheme. Registered before ready, as Electron requires.
+protocol.registerSchemesAsPrivileged([{
+  scheme: 'anthem-art',
+  privileges: { standard: true, secure: true, supportFetchAPI: true, bypassCSP: false }
+}])
+
 app.commandLine.appendSwitch('disable-background-timer-throttling')
 app.commandLine.appendSwitch('disable-renderer-backgrounding')
 app.commandLine.appendSwitch('disable-backgrounding-occluded-windows')
@@ -54,6 +63,19 @@ app.whenReady().then(() => {
   initSafety([app.getPath('userData'), join(app.getPath('temp'), 'anthem')])
 
   log.info('starting', { logging: describeLogging(), version: app.getVersion() })
+
+  // The url carries the cache path; only files inside the cache directory are served.
+  protocol.handle('anthem-art', (request) => {
+    const url = new URL(request.url)
+    const file = decodeURIComponent(url.pathname)
+    const root = artCacheDir()
+
+    if (!file.startsWith(root)) {
+      log.warn('refused art outside the cache', { file })
+      return new Response('forbidden', { status: 403 })
+    }
+    return net.fetch(pathToFileURL(file).toString())
+  })
 
   const db = openLibrary()
   const safety = safetyStatus()
