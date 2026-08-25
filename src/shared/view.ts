@@ -59,6 +59,11 @@ export class Selection {
   version = 0
 
   get size(): number { return this.set.size }
+
+  /** Internal state, for diagnostics: a wrong range is usually a wrong anchor. */
+  inspect(): { size: number; anchor: number | null } {
+    return { size: this.set.size, anchor: this.anchor }
+  }
   has(id: number): boolean { return this.set.has(id) }
   ids(): number[] { return [...this.set] }
 

@@ -44,8 +44,28 @@
 
   function selectRow(index: number, e: MouseEvent | KeyboardEvent): void {
     const modifiers = { shift: e.shiftKey, ctrl: e.ctrlKey || e.metaKey }
+    const anchorBefore = library.inspectSelection().anchor
+
     library.clickRow(index, modifiers)
-    log.debug('row clicked', { index, ...modifiers, selected: library.selectedCount() })
+
+    // Which rows ended up selected, not just how many: a wrong range is usually a wrong anchor.
+    const ids = library.selectedIds()
+    const positions = ids
+      .map((id) => library.tracks.findIndex((t) => t.id === id))
+      .filter((n) => n >= 0)
+      .sort((a, b) => a - b)
+
+    log.debug('row clicked', {
+      clicked: index,
+      shift: modifiers.shift,
+      ctrl: modifiers.ctrl,
+      anchorBefore,
+      anchorAfter: library.inspectSelection().anchor,
+      count: ids.length,
+      rows: positions.length > 8
+        ? `${positions[0]}..${positions[positions.length - 1]}`
+        : positions.join(',')
+    })
   }
 
   /** Playing from the list makes the whole visible list the context, as every player does. */

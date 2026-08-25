@@ -123,6 +123,12 @@ class LibraryStore {
     return this.selection.size
   }
 
+  /** Selection internals, for diagnostics only. */
+  inspectSelection(): { size: number; anchor: number | null } {
+    void this.selectionVersion
+    return this.selection.inspect()
+  }
+
   clickRow(index: number, modifiers: { shift?: boolean; ctrl?: boolean }): void {
     const ordered = this.tracks.map((t) => t.id)
     const intent = modifiers.shift ? 'range' : modifiers.ctrl ? 'toggle' : 'replace'
