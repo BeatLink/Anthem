@@ -21,8 +21,7 @@ const derived = (mode) => ({
   'waveform-played': 'var(--accent)',
   'waveform-unplayed': 'var(--border-default)',
   'row-even': 'transparent',
-  'row-odd': mode === 'dark' ? 'color-mix(in srgb, var(--surface-default) 94%, white)'
-                             : 'color-mix(in srgb, var(--surface-default) 97%, black)',
+  'row-odd': 'transparent',
   'row-hover': 'var(--surface-navigation-hover)',
   'row-selected': 'color-mix(in srgb, var(--accent) 22%, var(--surface-default))',
   'row-selected-inactive': 'color-mix(in srgb, var(--accent) 10%, var(--surface-default))',

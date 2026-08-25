@@ -7,6 +7,7 @@
   import FilterPane from './widgets/FilterPane.svelte'
   import SongList from './widgets/SongList.svelte'
   import SettingsPage from './widgets/settings/SettingsPage.svelte'
+  import Split from './lib/Split.svelte'
 
   let info = $state<AppInfo | null>(null)
   let safety = $state<SafetyStatus | null>(null)
@@ -58,6 +59,62 @@
        VPRight = HPfp0(genre | artist | album) _VBSongList
         VBSongList = HBSongList(search, filter actions) _SongList
 -->
+{#snippet leftPane()}
+  <div class="vbleft">
+    <Split
+      id="vbleft"
+      dir="vertical"
+      specs={[{ min: 150, max: 320 }, { min: 120, grow: true }]}
+      preferred={[196, undefined]}
+      panes={[playerPane, listsPane]}
+    />
+  </div>
+{/snippet}
+
+{#snippet playerPane()}<PlayerBlock />{/snippet}
+{#snippet listsPane()}<TabbedLists />{/snippet}
+
+{#snippet rightPane()}
+  <div class="tbright">
+    <div class="tabs">
+      <button class:active={rightTab === 'library'} onclick={() => (rightTab = 'library')}>
+        Library
+      </button>
+      <button class:active={rightTab === 'context'} onclick={() => (rightTab = 'context')}>
+        Context
+      </button>
+    </div>
+
+    {#if rightTab === 'library'}
+      <Split
+        id="vpright"
+        dir="vertical"
+        specs={[{ min: 90, max: 480 }, { min: 160, grow: true }]}
+        preferred={[190, undefined]}
+        panes={[panesRow, songListPane]}
+      />
+    {:else}
+      <div class="context">
+        <p>Context panel — lyrics, artist info and related tracks land in a later milestone.</p>
+      </div>
+    {/if}
+  </div>
+{/snippet}
+
+{#snippet panesRow()}
+  <Split
+    id="hpfp"
+    dir="horizontal"
+    specs={[{ min: 90 }, { min: 90 }, { min: 90, grow: true }]}
+    panes={[genrePane, artistPane, albumPane]}
+  />
+{/snippet}
+
+{#snippet genrePane()}<FilterPane field="genre" />{/snippet}
+{#snippet artistPane()}<FilterPane field="album_artist" />{/snippet}
+{#snippet albumPane()}<FilterPane field="album" />{/snippet}
+{#snippet songListPane()}<SongList />{/snippet}
+
 <div class="vbmain">
   {#if showSettings}
     <SettingsPage
@@ -88,38 +145,14 @@
     </button>
   </div>
 
-  <div class="hpmain">
-    <div class="vbleft">
-      <PlayerBlock />
-      <TabbedLists />
-    </div>
-
-    <div class="tbright">
-      <div class="tabs">
-        <button class:active={rightTab === 'library'} onclick={() => (rightTab = 'library')}>
-          Library
-        </button>
-        <button class:active={rightTab === 'context'} onclick={() => (rightTab = 'context')}>
-          Context
-        </button>
-      </div>
-
-      {#if rightTab === 'library'}
-        <div class="vpright">
-          <div class="hpfp">
-            <FilterPane field="genre" />
-            <FilterPane field="album_artist" />
-            <FilterPane field="album" />
-          </div>
-          <SongList />
-        </div>
-      {:else}
-        <div class="context">
-          <p>Context panel — lyrics, artist info and related tracks land in a later milestone.</p>
-        </div>
-      {/if}
-    </div>
-  </div>
+  <!-- Every boundary below is draggable; sizes persist per split id. -->
+  <Split
+    id="hpmain"
+    dir="horizontal"
+    specs={[{ min: 280, max: 720 }, { min: 420, grow: true }]}
+    preferred={[420, undefined]}
+    panes={[leftPane, rightPane]}
+  />
 
   <footer class="status">
     {#if library.error}
@@ -191,24 +224,18 @@
 
   .safety.pinned { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
 
-  .hpmain {
-    display: grid;
-    grid-template-columns: 420px 1fr;
-    min-height: 0;
-  }
-
   .vbleft {
     display: grid;
-    grid-template-rows: auto 1fr;
     min-height: 0;
+    height: 100%;
     background: var(--surface-navigation);
-    border-right: 1px solid var(--border-default);
   }
 
   .tbright {
     display: grid;
     grid-template-rows: auto 1fr;
     min-width: 0;
+    height: 100%;
     background: var(--surface-default);
   }
 
@@ -235,19 +262,6 @@
     color: var(--text-heading);
     background: var(--surface-default);
     border-color: var(--border-default);
-  }
-
-  .vpright {
-    display: grid;
-    grid-template-rows: 190px 1fr;
-    min-height: 0;
-  }
-
-  .hpfp {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    min-height: 0;
-    border-bottom: 1px solid var(--border-default);
   }
 
   .context { padding: var(--space-6); color: var(--text-tertiary); }

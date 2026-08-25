@@ -40,6 +40,9 @@
         {chip.label} ✕
       </button>
     {/each}
+    {#if library.hasFilters()}
+      <button class="clear" onclick={() => library.clearFilters()}>Clear all</button>
+    {/if}
     <span class="spacer"></span>
     <span class="count">{library.tracks.length.toLocaleString()} shown</span>
   </div>
@@ -118,6 +121,20 @@
     cursor: pointer;
   }
 
+  .clear {
+    flex: 0 0 auto;
+    height: var(--control-height-sm);
+    padding: 0 var(--space-3);
+    font-size: var(--font-size-sm);
+    color: var(--text-secondary);
+    background: transparent;
+    border: 1px solid var(--border-control);
+    border-radius: var(--radius-full);
+    cursor: pointer;
+  }
+
+  .clear:hover { color: var(--text-body); border-color: var(--border-focus); }
+
   .count { font-size: var(--font-size-sm); color: var(--text-tertiary); }
   .spacer { flex: 1; }
   .arrow { color: var(--accent); font-size: 9px; }
@@ -150,7 +167,6 @@
     align-items: center;
   }
 
-  .row:nth-child(odd) { background: var(--row-odd); }
   .row:hover { background: var(--row-hover); }
 
   .cell {

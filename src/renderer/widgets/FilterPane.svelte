@@ -11,7 +11,9 @@
   // The prop is fixed configuration; the select then owns the value.
   let current = $state(untrack(() => field))
   let rows = $state<GroupRow[]>([])
-  let selected = $state<string | null>(null)
+
+  // Read the selection back from the filter stack so a chip removal updates the pane too.
+  const selected = $derived(library.selectionFor(current))
 
   async function load(): Promise<void> {
     rows = await library.groupsFor(current)
@@ -21,9 +23,14 @@
 
   async function pick(row: GroupRow): Promise<void> {
     const label = row.label ?? null
-    selected = selected === label ? null : label
-    await library.setPaneFilter(current, selected)
+    await library.setPaneFilter(current, selected === label ? null : label)
   }
+
+  async function clear(): Promise<void> {
+    await library.setPaneFilter(current, null)
+  }
+
+  const total = $derived(rows.reduce((n, r) => n + r.n, 0))
 
 </script>
 
@@ -38,6 +45,12 @@
   </header>
 
   <ul>
+    <li>
+      <button class="row all" class:sel={selected === null} onclick={clear}>
+        <span class="label">All</span>
+        <span class="n">{total.toLocaleString()}</span>
+      </button>
+    </li>
     {#each rows as g (g.gid)}
       <li>
         <button class="row" class:sel={selected === (g.label ?? null)} onclick={() => pick(g)}>
@@ -98,9 +111,10 @@
     cursor: pointer;
   }
 
-  li:nth-child(odd) .row { background: var(--row-odd); }
   .row:hover { background: var(--row-hover); }
   .row.sel { background: var(--row-selected); color: var(--text-heading); }
+  .all { font-style: italic; color: var(--text-secondary); }
+  .all.sel { font-style: normal; }
 
   .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .n { font-variant-numeric: tabular-nums; color: var(--text-secondary); }

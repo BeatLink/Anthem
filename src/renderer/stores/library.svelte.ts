@@ -24,6 +24,7 @@ class LibraryStore {
 
   private readonly stack = new FilterStack()
   private readonly sort = new SortState()
+  private readonly paneValues = new Map<string, string>()
 
   constructor() {
     this.sort.set([{ field: 'album' }, { field: 'disc_number' }, { field: 'track_number' }])
@@ -35,6 +36,27 @@ class LibraryStore {
 
   chips(): readonly { id: string; label: string }[] {
     return this.stack.list().map((c) => ({ id: c.id, label: c.label }))
+  }
+
+  /**
+   * The stack is the single source of truth for what is filtered, so a pane reads its own selection
+   * back rather than keeping a private copy that could drift from the chips.
+   */
+  selectionFor(fieldId: string): string | null {
+    void this.version
+    return this.paneValues.get(fieldId) ?? null
+  }
+
+  hasFilters(): boolean {
+    void this.version
+    return this.stack.list().some((c) => c.removable)
+  }
+
+  async clearFilters(): Promise<void> {
+    this.stack.clear()
+    this.paneValues.clear()
+    this.search = ''
+    await this.refresh()
   }
 
   async refresh(): Promise<void> {
@@ -66,7 +88,9 @@ class LibraryStore {
 
     if (value === null) {
       this.stack.remove(id)
+      this.paneValues.delete(fieldId)
     } else {
+      this.paneValues.set(fieldId, value)
       const d = field(fieldId)
       const node = d.storage === 'multi'
         ? leaf(fieldId, 'any', [value])
@@ -96,6 +120,8 @@ class LibraryStore {
 
   async removeChip(id: string): Promise<void> {
     this.stack.remove(id)
+    if (id.startsWith('pane:')) this.paneValues.delete(id.slice('pane:'.length))
+    if (id === 'search') this.search = ''
     await this.refresh()
   }
 
