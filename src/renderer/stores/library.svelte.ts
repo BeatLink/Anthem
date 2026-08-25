@@ -10,6 +10,15 @@ import { leaf, or } from '@shared/filter'
 import { FilterStack, Selection, SortState } from '@shared/view'
 import type { GroupRow, LibraryStats, TrackRow } from '@shared/ipc'
 import { field } from '@shared/fields'
+import { readPref, writePref } from '@shared/prefs'
+import { sanitizePaneValues, sanitizeSortKeys } from '@shared/viewstate'
+
+const storage = (): Storage | undefined =>
+  typeof localStorage === 'undefined' ? undefined : localStorage
+
+const KEY_SORT = 'anthem.pref.library.sort'
+const KEY_PANES = 'anthem.pref.library.panes'
+const KEY_SEARCH = 'anthem.pref.library.search'
 
 const PAGE = 500
 
@@ -35,7 +44,27 @@ class LibraryStore {
   selectionVersion = $state(0)
 
   constructor() {
-    this.sort.set([{ field: 'album' }, { field: 'disc_number' }, { field: 'track_number' }])
+    const saved = sanitizeSortKeys(readPref<unknown>(storage(), KEY_SORT, null))
+    this.sort.set(saved.length > 0
+      ? saved
+      : [{ field: 'album' }, { field: 'disc_number' }, { field: 'track_number' }])
+
+    // Pane selections and the search term are rebuilt into the filter stack, so the chips show up
+    // and the user can see why the library is narrowed rather than wondering.
+    for (const [fieldId, values] of Object.entries(
+      sanitizePaneValues(readPref<unknown>(storage(), KEY_PANES, null))
+    )) {
+      this.applyPane(fieldId, values)
+    }
+
+    const search = readPref(storage(), KEY_SEARCH, '')
+    if (typeof search === 'string' && search.trim() !== '') this.applySearch(search)
+  }
+
+  private persist(): void {
+    writePref(storage(), KEY_SORT, this.sort.list())
+    writePref(storage(), KEY_PANES, Object.fromEntries(this.paneValues))
+    writePref(storage(), KEY_SEARCH, this.search)
   }
 
   private filter(): FilterNode {
@@ -74,6 +103,7 @@ class LibraryStore {
     this.paneValues.clear()
     this.paneAnchor.clear()
     this.search = ''
+    this.persist()
     await this.refresh()
   }
 
@@ -169,6 +199,7 @@ class LibraryStore {
     }
 
     this.applyPane(fieldId, next)
+    this.persist()
     await this.refresh()
   }
 
@@ -197,7 +228,7 @@ class LibraryStore {
     this.stack.push({ id, label, node, removable: true })
   }
 
-  async setSearch(text: string): Promise<void> {
+  private applySearch(text: string): void {
     this.search = text
     const id = 'search'
 
@@ -210,7 +241,11 @@ class LibraryStore {
         removable: true
       })
     }
+  }
 
+  async setSearch(text: string): Promise<void> {
+    this.applySearch(text)
+    this.persist()
     await this.refresh()
   }
 
@@ -222,11 +257,13 @@ class LibraryStore {
       this.paneAnchor.delete(fieldId)
     }
     if (id === 'search') this.search = ''
+    this.persist()
     await this.refresh()
   }
 
   async toggleSort(fieldId: string, additive: boolean): Promise<void> {
     this.sort.toggle(fieldId, additive)
+    this.persist()
     await this.refresh()
   }
 

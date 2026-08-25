@@ -5,9 +5,38 @@
   import MergeView from './MergeView.svelte'
   import { player } from '../stores/player.svelte'
   import SongProperties from './SongProperties.svelte'
+  import ContextMenu, { type MenuItem } from '../lib/ContextMenu.svelte'
 
   let merging = $state<number[] | null>(null)
   let inspecting = $state<number | null>(null)
+  let menu = $state<{ x: number; y: number; items: MenuItem[] } | null>(null)
+
+  /** Right-clicking a row that is not selected selects it, as every list does. */
+  function openMenu(e: MouseEvent, index: number): void {
+    e.preventDefault()
+    const t = library.tracks[index]
+    if (!t) return
+    if (!library.isSelected(t.id)) library.clickRow(index, {})
+
+    const ids = library.selectedIds()
+    const many = ids.length > 1
+
+    menu = {
+      x: e.clientX,
+      y: e.clientY,
+      items: [
+        { id: 'play', label: 'Play', hint: 'Enter', action: () => playFrom(index) },
+        { id: 'next', label: many ? `Play ${ids.length} next` : 'Play next',
+          action: () => void player.enqueue(ids, 'next') },
+        { id: 'queue', label: many ? `Add ${ids.length} to queue` : 'Add to queue',
+          action: () => void player.enqueue(ids, 'end') },
+        { id: 'props', label: 'Properties', hint: 'Alt+Enter', separatorBefore: true,
+          disabled: many, action: () => (inspecting = t.id) },
+        { id: 'merge', label: `Merge ${ids.length} tracks…`, disabled: !many,
+          action: () => (merging = ids) }
+      ]
+    }
+  }
 
   /** Playing from the list makes the whole visible list the context, as every player does. */
   function playFrom(index: number): void {
@@ -87,7 +116,7 @@
     {/if}
     <span class="spacer"></span>
     <span class="hint" title="Click a column header to sort. Shift+click another to sort by it next.">
-      double-click to play · shift+click to multi-sort
+      double-click to play · right-click for actions · shift+click to multi-sort
     </span>
     <span class="count">{library.tracks.length.toLocaleString()} shown</span>
   </div>
@@ -115,6 +144,7 @@
         tabindex="0"
         onclick={(e) => library.clickRow(i, { shift: e.shiftKey, ctrl: e.ctrlKey || e.metaKey })}
         ondblclick={() => playFrom(i)}
+        oncontextmenu={(e) => openMenu(e, i)}
         onkeydown={(e) => {
           if (e.key === 'Enter' && e.altKey) { e.preventDefault(); inspecting = t.id; return }
           if (e.key === 'Enter') { e.preventDefault(); playFrom(i); return }
@@ -142,6 +172,10 @@
     {/each}
   </div>
 </section>
+
+{#if menu}
+  <ContextMenu x={menu.x} y={menu.y} items={menu.items} onclose={() => (menu = null)} />
+{/if}
 
 {#if inspecting !== null}
   <SongProperties trackId={inspecting} onclose={() => (inspecting = null)} />

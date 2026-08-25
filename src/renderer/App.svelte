@@ -120,9 +120,9 @@
   />
 {/snippet}
 
-{#snippet genrePane()}<FilterPane field="genre" />{/snippet}
-{#snippet artistPane()}<FilterPane field="album_artist" />{/snippet}
-{#snippet albumPane()}<FilterPane field="album" />{/snippet}
+{#snippet genrePane()}<FilterPane id="fp0" field="genre" />{/snippet}
+{#snippet artistPane()}<FilterPane id="fp1" field="album_artist" />{/snippet}
+{#snippet albumPane()}<FilterPane id="fp2" field="album" />{/snippet}
 {#snippet songListPane()}<SongList />{/snippet}
 
 <div class="vbmain">

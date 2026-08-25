@@ -2,14 +2,23 @@
   import { library } from '../stores/library.svelte'
   import type { GroupRow } from '@shared/ipc'
   import { untrack } from 'svelte'
-  import { field as fieldDef } from '@shared/fields'
+  import { field as fieldDef, fieldsWith } from '@shared/fields'
+  import { pref } from '../lib/prefs.svelte'
+  import { sanitizePaneField } from '@shared/viewstate'
 
-  let { field = 'genre' }: { field?: string } = $props()
+  let { field = 'genre', id = 'pane' }: { field?: string; id?: string } = $props()
 
-  const groupable = ['genre', 'album_artist', 'artist', 'album', 'grouping', 'year', 'codec']
+  // Every groupable field, per DESIGN-SPEC §3.2.1: no field is second class, so the list is
+  // derived from the catalogue rather than being a hand-picked few.
+  const groupable = fieldsWith('groupable')
+    .map((d) => ({ id: d.id, name: d.name }))
+    .sort((a, b) => a.name.localeCompare(b.name))
 
-  // The prop is fixed configuration; the select then owns the value.
-  let current = $state(untrack(() => field))
+  // The prop is the default; what the user last chose wins, if it still names a real field.
+  const remembered = pref<string>(`pane.${untrack(() => id)}.field`, untrack(() => field))
+  let current = $state(sanitizePaneField(remembered.value, untrack(() => field)))
+
+  $effect(() => { remembered.value = current })
   let rows = $state<GroupRow[]>([])
 
   // Read the selection back from the filter stack so a chip removal updates the pane too.
@@ -36,13 +45,23 @@
 
   const total = $derived(rows.reduce((n, r) => n + r.n, 0))
 
+  /** A rating is stored 0-100 but read as stars, so the pane shows what the user recognises. */
+  function display(label: string | null): string {
+    if (label === null || label === '') return '(none)'
+    if (current !== 'rating') return label
+    const n = Number(label)
+    if (!Number.isFinite(n)) return label
+    const stars = Math.round(n / 20)
+    return `${'★'.repeat(stars)}${'☆'.repeat(5 - stars)}`
+  }
+
 </script>
 
 <section class="pane" aria-label="Filter pane">
   <header>
     <select value={current} onchange={(e) => (current = e.currentTarget.value)}>
-      {#each groupable as f (f)}
-        <option value={f}>{fieldDef(f).name}</option>
+      {#each groupable as f (f.id)}
+        <option value={f.id}>{f.name}</option>
       {/each}
     </select>
     <span class="count">
@@ -64,7 +83,7 @@
           class:sel={library.isPaneSelected(current, g.label ?? null)}
           onclick={(e) => pick(g, i, e)}
         >
-          <span class="label">{g.label ?? '(none)'}</span>
+          <span class="label">{display(g.label)}</span>
           <span class="n">{g.n}</span>
         </button>
       </li>

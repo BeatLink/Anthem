@@ -235,7 +235,7 @@ is generic over it:
 |---|---|
 | Filter compilers | Dispatch on `storage` (§3.5.2) and `type` (§3.3); no field is named in either compiler |
 | Column picker | Lists `fieldsWith('columnar')`; a new field appears without touching the widget |
-| Filter panes | Any `groupable` field is selectable in a pane, including user-defined ones |
+| Filter panes | Any `groupable` field is selectable in a pane — the dropdown is built from `fieldsWith('groupable')`, so a new field appears without touching the widget |
 | Sort | Any `sortable` field is a sort key, in any position of a multi-key sort (§4.3.1) |
 | Format strings | `{any_field}` resolves through the same descriptor lookup (§5.5) |
 | Tag round-trip | A user field with a `tags` mapping writes to files; without one it lives only in the database |
@@ -747,8 +747,15 @@ patches). Shipping a "Halon + big album art" variant is then a 10-line file.
 ### 5.3.1 Remembered view settings
 
 View settings persist per user rather than resetting on every launch: theme, density, the merge
-view's *Only differences* toggle, the duplicate finder's strategies and tolerance, and split-pane
-sizes.
+view's *Only differences* toggle, the duplicate finder's strategies and tolerance, split-pane sizes,
+**the sort order, the active filters, the search term, and which field each filter pane shows**.
+
+Remembered *browse state* needs more care than a remembered toggle, because it can outlive what it
+names. A sort key or a pane selection referring to a field that no longer exists would either break
+the view or silently narrow the library to nothing with no visible cause. So `shared/viewstate.ts`
+validates everything restored against the current field catalogue and drops what it cannot
+recognise, and restored filters are rebuilt **as visible chips** rather than applied invisibly — the
+user can see why the library is narrowed, and clear it.
 
 The parsing lives in `src/shared/prefs.ts`, apart from any framework, because the interesting case
 is not the happy path — it is a stored value that is corrupt, left over from an older version, or of
