@@ -9,12 +9,14 @@
   import SongList from './widgets/SongList.svelte'
   import SettingsPage from './widgets/settings/SettingsPage.svelte'
   import Split from './lib/Split.svelte'
+  import { pref } from './lib/prefs.svelte'
+  import { oneOf } from '@shared/prefs'
 
   let info = $state<AppInfo | null>(null)
   let safety = $state<SafetyStatus | null>(null)
-  let theme = $state<'light' | 'dark' | 'system'>('system')
+  const theme = pref('theme', 'system', oneOf('light', 'dark', 'system'))
   let rightTab = $state<'library' | 'context'>('library')
-  let density = $state<'compact' | 'normal' | 'comfortable'>('normal')
+  const density = pref('density', 'normal', oneOf('compact', 'normal', 'comfortable'))
   let showSettings = $state(false)
   let settingsSection = $state<'library' | 'folders' | 'import' | 'duplicates' | 'appearance' | 'about'>('library')
 
@@ -31,16 +33,16 @@
 
   $effect(() => {
     const root = document.documentElement
-    if (theme === 'system') root.removeAttribute('data-theme')
-    else root.setAttribute('data-theme', theme)
+    if (theme.value === 'system') root.removeAttribute('data-theme')
+    else root.setAttribute('data-theme', theme.value)
   })
 
   $effect(() => {
-    document.documentElement.setAttribute('data-density', density)
+    document.documentElement.setAttribute('data-density', density.value)
   })
 
   const cycleTheme = (): void => {
-    theme = theme === 'system' ? 'light' : theme === 'light' ? 'dark' : 'system'
+    theme.value = theme.value === 'system' ? 'light' : theme.value === 'light' ? 'dark' : 'system'
   }
 
   const duration = (ms: number): string => {
@@ -121,12 +123,12 @@
     <SettingsPage
       {info}
       {safety}
-      {theme}
-      {density}
+      theme={theme.value}
+      density={density.value}
       initialSection={settingsSection}
       onclose={() => (showSettings = false)}
-      onTheme={(t) => (theme = t)}
-      onDensity={(d) => (density = d)}
+      onTheme={(t) => (theme.value = t)}
+      onDensity={(d) => (density.value = d)}
     />
   {/if}
 
@@ -141,8 +143,8 @@
       </span>
     {/if}
 
-    <button class="menu-item" onclick={cycleTheme} title="Theme: {theme}">
-      {theme === 'dark' ? '◐' : theme === 'light' ? '◑' : '◒'}
+    <button class="menu-item" onclick={cycleTheme} title="Theme: {theme.value}">
+      {theme.value === 'dark' ? '◐' : theme.value === 'light' ? '◑' : '◒'}
     </button>
   </div>
 

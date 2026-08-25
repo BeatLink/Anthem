@@ -744,6 +744,24 @@ Three levels, all reaching the same document:
 Layouts support `extends`: a layout may inherit another and patch nodes by id (RFC 6902-style
 patches). Shipping a "Halon + big album art" variant is then a 10-line file.
 
+### 5.3.1 Remembered view settings
+
+View settings persist per user rather than resetting on every launch: theme, density, the merge
+view's *Only differences* toggle, the duplicate finder's strategies and tolerance, and split-pane
+sizes.
+
+The parsing lives in `src/shared/prefs.ts`, apart from any framework, because the interesting case
+is not the happy path — it is a stored value that is corrupt, left over from an older version, or of
+the wrong shape. **A bad stored value must never break the view it belongs to**, so every read falls
+back to the default when the JSON is unparseable, fails its validator, or no longer matches the
+default's type. Storage being unavailable entirely is handled the same way. `test/unit/prefs.test.ts`
+covers each of those cases.
+
+These are deliberately *not* in the library database. They are per-machine view state, not library
+data, and putting them in SQLite would mean they travelled with a library export where they do not
+belong. Settings that describe the library — watched roots, read-only mode — do live in the
+database.
+
 ### 5.4 Theming
 
 Themes are **token documents**, not stylesheets. Halon's `tokens.json` is the reference input and its

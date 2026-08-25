@@ -3,13 +3,15 @@
   import type { DuplicateGroup, DuplicateReason, MergeResult } from '@shared/ipc'
   import MergeView from '../MergeView.svelte'
   import { library } from '../../stores/library.svelte'
+  import { pref } from '../../lib/prefs.svelte'
+  import { isNumberIn } from '@shared/prefs'
 
   let groups = $state<DuplicateGroup[]>([])
   let busy = $state(false)
   let ran = $state(false)
   let error = $state<string | null>(null)
   let merging = $state<number[] | null>(null)
-  let tolerance = $state(3)
+  const tolerance = pref('duplicates.toleranceSeconds', 3, isNumberIn(0, 60))
 
   const REASONS: { id: DuplicateReason; label: string; hint: string }[] = [
     { id: 'audio_hash', label: 'Identical audio', hint: 'Byte-identical content' },
@@ -19,9 +21,13 @@
   ]
 
   // Fuzzy is off by default: on a real library it proposes far more than anyone can review.
-  let enabled = $state<Record<DuplicateReason, boolean>>({
+  const enabled = pref<Record<DuplicateReason, boolean>>('duplicates.reasons', {
     audio_hash: true, mb_recording_id: true, tags: true, fuzzy: false
   })
+
+  function toggleReason(id: DuplicateReason): void {
+    enabled.value = { ...enabled.value, [id]: !enabled.value[id] }
+  }
 
   const MAX_SHOWN = 200
 
@@ -73,8 +79,8 @@
     error = null
     try {
       groups = await ipc('tracks:duplicates', {
-        reasons: REASONS.map((r) => r.id).filter((r) => enabled[r]),
-        lengthToleranceMs: tolerance * 1000,
+        reasons: REASONS.map((r) => r.id).filter((r) => enabled.value[r]),
+        lengthToleranceMs: tolerance.value * 1000,
         limit: MAX_SHOWN
       })
       ran = true
@@ -105,13 +111,14 @@
   <div class="opts">
     {#each REASONS as r (r.id)}
       <label title={r.hint}>
-        <input type="checkbox" bind:checked={enabled[r.id]} /> {r.label}
+        <input type="checkbox" checked={enabled.value[r.id]} onchange={() => toggleReason(r.id)} />
+        {r.label}
         {#if r.id === 'fuzzy'}<span class="warnish">noisy</span>{/if}
       </label>
     {/each}
     <label class="tol">
       Length tolerance
-      <input type="number" min="0" max="60" bind:value={tolerance} /> s
+      <input type="number" min="0" max="60" bind:value={tolerance.value} /> s
     </label>
   </div>
 

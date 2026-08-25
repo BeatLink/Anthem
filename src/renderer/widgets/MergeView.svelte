@@ -7,6 +7,8 @@
   import { ipc } from '../lib/ipc'
   import { library } from '../stores/library.svelte'
   import Page from '../lib/Page.svelte'
+  import { pref } from '../lib/prefs.svelte'
+  import { isBoolean } from '@shared/prefs'
 
   let { ids, onclose }: { ids: number[]; onclose?: (merged: boolean) => void } = $props()
 
@@ -17,7 +19,7 @@
   let error = $state<string | null>(null)
   let result = $state<MergeResult | null>(null)
   let undoing = $state(false)
-  let onlyDifferences = $state(false)
+  const onlyDifferences = pref('merge.onlyDifferences', false, isBoolean)
 
   onMount(async () => {
     try {
@@ -87,7 +89,7 @@
   }
 
   const visibleFields = $derived(
-    (preview?.fields ?? []).filter((f) => !onlyDifferences || f.conflict)
+    (preview?.fields ?? []).filter((f) => !onlyDifferences.value || f.conflict)
   )
 
   const conflictCount = $derived((preview?.fields ?? []).filter((f) => f.conflict).length)
@@ -138,7 +140,7 @@
   {#snippet actions()}
     {#if !result && preview}
       <label class="toggle">
-        <input type="checkbox" bind:checked={onlyDifferences} /> Only differences
+        <input type="checkbox" bind:checked={onlyDifferences.value} /> Only differences
       </label>
       <button class="primary" onclick={apply} disabled={busy || survivor === null}>
         {busy ? 'Merging…' : 'Merge'}
