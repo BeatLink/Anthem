@@ -4,8 +4,10 @@
   import Stars from './Stars.svelte'
   import MergeView from './MergeView.svelte'
   import { player } from '../stores/player.svelte'
+  import SongProperties from './SongProperties.svelte'
 
   let merging = $state<number[] | null>(null)
+  let inspecting = $state<number | null>(null)
 
   /** Playing from the list makes the whole visible list the context, as every player does. */
   function playFrom(index: number): void {
@@ -73,6 +75,11 @@
         Queue {library.selectedCount()}
       </button>
     {/if}
+    {#if library.selectedCount() === 1}
+      <button class="clear" onclick={() => (inspecting = library.selectedIds()[0]!)}>
+        Properties
+      </button>
+    {/if}
     {#if library.selectedCount() > 1}
       <button class="merge" onclick={() => (merging = library.selectedIds())}>
         Merge {library.selectedCount()}…
@@ -109,6 +116,7 @@
         onclick={(e) => library.clickRow(i, { shift: e.shiftKey, ctrl: e.ctrlKey || e.metaKey })}
         ondblclick={() => playFrom(i)}
         onkeydown={(e) => {
+          if (e.key === 'Enter' && e.altKey) { e.preventDefault(); inspecting = t.id; return }
           if (e.key === 'Enter') { e.preventDefault(); playFrom(i); return }
           if (e.key !== ' ') return
           e.preventDefault()
@@ -134,6 +142,10 @@
     {/each}
   </div>
 </section>
+
+{#if inspecting !== null}
+  <SongProperties trackId={inspecting} onclose={() => (inspecting = null)} />
+{/if}
 
 {#if merging}
   <MergeView

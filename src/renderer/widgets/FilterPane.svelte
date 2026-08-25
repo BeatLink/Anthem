@@ -13,7 +13,7 @@
   let rows = $state<GroupRow[]>([])
 
   // Read the selection back from the filter stack so a chip removal updates the pane too.
-  const selected = $derived(library.selectionFor(current))
+  const selectedCount = $derived(library.selectionFor(current).length)
 
   async function load(): Promise<void> {
     rows = await library.groupsFor(current)
@@ -21,9 +21,13 @@
 
   $effect(() => { void current; void library.version; void load() })
 
-  async function pick(row: GroupRow): Promise<void> {
-    const label = row.label ?? null
-    await library.setPaneFilter(current, selected === label ? null : label)
+  async function pick(row: GroupRow, index: number, e: MouseEvent | KeyboardEvent): Promise<void> {
+    await library.setPaneFilter(current, row.label ?? null, {
+      shift: e.shiftKey,
+      ctrl: e.ctrlKey || e.metaKey,
+      index,
+      ordered: rows.map((r) => r.label)
+    })
   }
 
   async function clear(): Promise<void> {
@@ -41,19 +45,25 @@
         <option value={f}>{fieldDef(f).name}</option>
       {/each}
     </select>
-    <span class="count">{rows.length}</span>
+    <span class="count">
+      {#if selectedCount > 1}{selectedCount} of {rows.length}{:else}{rows.length}{/if}
+    </span>
   </header>
 
   <ul>
     <li>
-      <button class="row all" class:sel={selected === null} onclick={clear}>
+      <button class="row all" class:sel={selectedCount === 0} onclick={clear}>
         <span class="label">All</span>
         <span class="n">{total.toLocaleString()}</span>
       </button>
     </li>
-    {#each rows as g (g.gid)}
+    {#each rows as g, i (g.gid)}
       <li>
-        <button class="row" class:sel={selected === (g.label ?? null)} onclick={() => pick(g)}>
+        <button
+          class="row"
+          class:sel={library.isPaneSelected(current, g.label ?? null)}
+          onclick={(e) => pick(g, i, e)}
+        >
           <span class="label">{g.label ?? '(none)'}</span>
           <span class="n">{g.n}</span>
         </button>

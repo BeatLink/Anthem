@@ -6,7 +6,7 @@ import { ipc } from '../lib/ipc'
 // means rewriting this file, not the logic inside it.
 
 import type { FilterNode } from '@shared/filter'
-import { leaf } from '@shared/filter'
+import { leaf, or } from '@shared/filter'
 import { FilterStack, Selection, SortState } from '@shared/view'
 import type { GroupRow, LibraryStats, TrackRow } from '@shared/ipc'
 import { field } from '@shared/fields'
@@ -25,7 +25,10 @@ class LibraryStore {
 
   private readonly stack = new FilterStack()
   private readonly sort = new SortState()
-  private readonly paneValues = new Map<string, string>()
+  /** Field id → selected values. Several values in one pane mean OR, as gmusicbrowser does. */
+  private readonly paneValues = new Map<string, string[]>()
+  /** Last clicked row per pane, so shift can extend from it. */
+  private readonly paneAnchor = new Map<string, number>()
   private readonly selection = new Selection()
 
   /** Bumped on selection changes, for the same reason `version` exists. */
@@ -49,9 +52,16 @@ class LibraryStore {
    * The stack is the single source of truth for what is filtered, so a pane reads its own selection
    * back rather than keeping a private copy that could drift from the chips.
    */
-  selectionFor(fieldId: string): string | null {
+  selectionFor(fieldId: string): readonly string[] {
     void this.version
-    return this.paneValues.get(fieldId) ?? null
+    return this.paneValues.get(fieldId) ?? []
+  }
+
+  isPaneSelected(fieldId: string, value: string | null): boolean {
+    void this.version
+    const values = this.paneValues.get(fieldId)
+    if (!values || values.length === 0) return value === null
+    return value !== null && values.includes(value)
   }
 
   hasFilters(): boolean {
@@ -62,6 +72,7 @@ class LibraryStore {
   async clearFilters(): Promise<void> {
     this.stack.clear()
     this.paneValues.clear()
+    this.paneAnchor.clear()
     this.search = ''
     await this.refresh()
   }
@@ -126,23 +137,64 @@ class LibraryStore {
     }
   }
 
-  /** A filter pane selection narrows the query; deselecting removes just that chip. */
-  async setPaneFilter(fieldId: string, value: string | null): Promise<void> {
-    const id = `pane:${fieldId}`
+  /**
+   * A pane click narrows the query. Several values within one pane are OR'd together, which is what
+   * makes "Jazz and Blues" a single browse step rather than two.
+   */
+  async setPaneFilter(
+    fieldId: string,
+    value: string | null,
+    modifiers: { shift?: boolean; ctrl?: boolean; index?: number; ordered?: readonly (string | null)[] } = {}
+  ): Promise<void> {
+    const current = this.paneValues.get(fieldId) ?? []
+    let next: string[]
 
     if (value === null) {
-      this.stack.remove(id)
-      this.paneValues.delete(fieldId)
+      next = []
+    } else if (modifiers.shift && modifiers.ordered && modifiers.index !== undefined) {
+      const anchor = this.paneAnchor.get(fieldId) ?? modifiers.index
+      const [lo, hi] = anchor <= modifiers.index
+        ? [anchor, modifiers.index]
+        : [modifiers.index, anchor]
+      next = modifiers.ordered.slice(lo, hi + 1).filter((v): v is string => v !== null)
+    } else if (modifiers.ctrl) {
+      next = current.includes(value)
+        ? current.filter((v) => v !== value)
+        : [...current, value]
+      this.paneAnchor.set(fieldId, modifiers.index ?? 0)
     } else {
-      this.paneValues.set(fieldId, value)
-      const d = field(fieldId)
-      const node = d.storage === 'multi'
-        ? leaf(fieldId, 'any', [value])
-        : leaf(fieldId, 'is', d.type === 'integer' ? Number(value) : value)
-      this.stack.push({ id, label: `${d.name}: ${value}`, node, removable: true })
+      // A plain click on the only selected value clears it, which is how a toggle should feel.
+      next = current.length === 1 && current[0] === value ? [] : [value]
+      this.paneAnchor.set(fieldId, modifiers.index ?? 0)
     }
 
+    this.applyPane(fieldId, next)
     await this.refresh()
+  }
+
+  private applyPane(fieldId: string, values: readonly string[]): void {
+    const id = `pane:${fieldId}`
+
+    if (values.length === 0) {
+      this.stack.remove(id)
+      this.paneValues.delete(fieldId)
+      return
+    }
+
+    this.paneValues.set(fieldId, [...values])
+    const d = field(fieldId)
+
+    const node = d.storage === 'multi'
+      ? leaf(fieldId, 'any', [...values])
+      : values.length === 1
+        ? leaf(fieldId, 'is', d.type === 'integer' ? Number(values[0]) : values[0]!)
+        : or(...values.map((v) => leaf(fieldId, 'is', d.type === 'integer' ? Number(v) : v)))
+
+    const label = values.length === 1
+      ? `${d.name}: ${values[0]}`
+      : `${d.name}: ${values.length} selected`
+
+    this.stack.push({ id, label, node, removable: true })
   }
 
   async setSearch(text: string): Promise<void> {
@@ -164,7 +216,11 @@ class LibraryStore {
 
   async removeChip(id: string): Promise<void> {
     this.stack.remove(id)
-    if (id.startsWith('pane:')) this.paneValues.delete(id.slice('pane:'.length))
+    if (id.startsWith('pane:')) {
+      const fieldId = id.slice('pane:'.length)
+      this.paneValues.delete(fieldId)
+      this.paneAnchor.delete(fieldId)
+    }
     if (id === 'search') this.search = ''
     await this.refresh()
   }

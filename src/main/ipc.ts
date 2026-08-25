@@ -1,4 +1,4 @@
-import { ipcMain, app, dialog, BrowserWindow } from 'electron'
+import { ipcMain, app, dialog, shell, BrowserWindow } from 'electron'
 import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 
@@ -12,6 +12,7 @@ import { importGmbrc } from './import/gmb-import'
 import { scanRoots } from './library/scan'
 import { mergePreview, mergeTracks, unmerge } from './library/merge'
 import { findDuplicates } from './library/duplicates'
+import { trackDetails } from './library/details'
 import { Player } from './play/player'
 import { MpvEngine, findMpv } from './play/mpv'
 import { NullEngine } from './play/engine'
@@ -205,6 +206,14 @@ export function registerIpc(db: DB): void {
       }
       return run as never
     })(),
+
+    'tracks:details': (trackId) => trackDetails(db as never, trackId) as never,
+
+    'tracks:reveal': (uri) => {
+      // Showing a file is a read; it does not need the write guard.
+      shell.showItemInFolder(uri)
+      return { revealed: true }
+    },
 
     'player:status': () => player.status() as never,
 

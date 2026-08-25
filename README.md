@@ -30,7 +30,8 @@ implemented yet. See the roadmap in DESIGN-SPEC §15.
 | Filesystem watching | not started |
 | Merge tracks, with per-field resolution and undo | working |
 | Duplicate detection (hash, MBID, tags, fuzzy) | working |
-| Song properties panel | next (DESIGN-SPEC §6.5) |
+| Song properties (identity, sources, raw tags, history) | working |
+| Album art | not started (DESIGN-SPEC §7.3) |
 | Picard hand-off for tagging | specified (DESIGN-SPEC §7.1.1) |
 
 ## The one idea worth knowing

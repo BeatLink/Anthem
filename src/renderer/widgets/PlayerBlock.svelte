@@ -3,6 +3,7 @@
 
   import { player } from '../stores/player.svelte'
   import Stars from './Stars.svelte'
+  import VolumeButton from './VolumeButton.svelte'
 
   const mmss = (ms: number | null | undefined): string => {
     if (ms === null || ms === undefined || !Number.isFinite(ms)) return '0:00'
@@ -71,12 +72,9 @@
         >{player.playing ? '⏸' : '▶'}</button>
         <button aria-label="Next" onclick={() => player.next()}>⏭</button>
         <span class="spacer"></span>
-        <input
-          class="vol"
-          type="range" min="0" max="100"
-          value={player.status?.volume ?? 80}
-          aria-label="Volume"
-          oninput={(e) => player.setVolume(Number(e.currentTarget.value))}
+        <VolumeButton
+          volume={player.status?.volume ?? 80}
+          onchange={(v) => player.setVolume(v)}
         />
       </div>
 
@@ -172,7 +170,6 @@
   }
 
   input[type='range'] { width: 100%; accent-color: var(--media-progress); }
-  .vol { width: 90px; }
 
   .cover {
     width: 88px;

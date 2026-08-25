@@ -849,7 +849,7 @@ The active query is a visible stack of chips: `Library → genre: Jazz → ratin
 Each chip is removable and reorderable; the stack is the AST. This replaces the "where did this view
 come from?" confusion that browse-by-panes normally causes.
 
-### 6.5 Song properties — next up
+### 6.5 Song properties — implemented
 
 A dedicated view for everything Anthem knows about one track. This is the first place the entity
 model becomes visible to the user, and it is the natural home for several features that currently
@@ -880,8 +880,21 @@ have nowhere to live.
 files?", "which copy plays?", "is this one track or two?", "did my rating survive?") is answered by
 this one view. It is also read-only, so it carries none of the risk of the tag editor.
 
-**What is needed:** an IPC channel returning a track with its media, raw tags, and history; a
-`contextpanel` tab plus a standalone window; and the reveal-in-file-manager shell call.
+`src/main/library/details.ts` gathers it; `SongProperties.svelte` renders it as a full-screen view
+reached from the song list (select one track, then Properties, or Alt+Enter).
+
+Four sections: **Overview** (metadata, identity, statistics, loudness, merge provenance),
+**Sources**, **Raw tags** per source, and **History**.
+
+Two things it does that a plain field dump would not:
+
+- **It explains itself.** `identity_source` is rendered as a sentence — "Grouped by its path and
+  tags; no stronger evidence was available" — and each `audio_hash_algo` says what it implies, so
+  `sha256-file` is visibly weaker than `flac-streaminfo-md5` rather than being an opaque string.
+- **It marks which source actually plays**, using the same ordering the player uses, so "which copy
+  am I hearing?" has an answer rather than an inference.
+
+Still to do: album and artist artwork (§7.3), which is not implemented anywhere yet.
 
 ### 6.4 CSS baseline
 
@@ -1494,7 +1507,7 @@ repeat and shuffle, play and skip counting, ReplayGain application, source selec
 seek bar, live queue tab, double-click to play. Still outstanding: MPRIS, global media keys,
 crossfade, and verifying gapless against a known-gapless album.
 
-**M3.5 — Song properties (next).** The view described in §6.5: identity and how it was decided,
+**M3.5 — Song properties. ✅ done.** The view described in §6.5: identity and how it was decided,
 every media source with its location and technical detail, raw per-source tags side by side where
 they disagree, statistics, and merge provenance. Read-only, so it carries none of the tag editor's
 risk, and it is what makes the entity model legible.

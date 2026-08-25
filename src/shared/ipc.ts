@@ -203,6 +203,63 @@ export interface PlayerStatus {
   error?: string
 }
 
+export interface DetailMedia {
+  id: number
+  kind: string
+  uri: string
+  provider: string | null
+  present: boolean
+  preferred: boolean
+  codec: string | null
+  container: string | null
+  bitrate: number | null
+  bitrateMode: string | null
+  samplerate: number | null
+  channels: number | null
+  bitsPerSample: number | null
+  filesize: number | null
+  mtime: number | null
+  lastSeen: number | null
+  qualityRank: number
+  audioHashHex: string | null
+  audioHashAlgo: string | null
+  subtrackIndex: number
+  startMs: number | null
+  endMs: number | null
+  tags: { field: string; value: string }[]
+}
+
+export interface TrackDetails {
+  id: number
+  title: string | null
+  album: string | null
+  albumId: number | null
+  identity: {
+    source: string
+    key: string | null
+    pinned: boolean
+    mbRecordingId: string | null
+    acoustid: string | null
+  }
+  fields: { field: string; name: string; value: string | null; multi: boolean }[]
+  media: DetailMedia[]
+  statistics: {
+    rating: number | null
+    playCount: number
+    skipCount: number
+    firstPlayed: number | null
+    lastPlayed: number | null
+    lastSkipped: number | null
+    added: number
+    modified: number
+    bookmarkMs: number | null
+  }
+  loudness: { rgTrackGain: number | null; rgAlbumGain: number | null }
+  history: { at: number; kind: 'play' | 'skip' }[]
+  historyTotal: number
+  merges: { batchId: string; at: number; absorbed: number }[]
+}
+
 export interface AppInfo {
   version: string
   electron: string
@@ -238,6 +295,8 @@ export interface AnthemApi {
     resolutions?: Record<string, Resolution>
   }) => MergeResult
   'tracks:unmerge': (batchId: string) => { batchId: string; restored: number[]; survivor: number }
+  'tracks:details': (trackId: number) => TrackDetails | null
+  'tracks:reveal': (uri: string) => { revealed: boolean }
   'player:status': () => PlayerStatus
   'player:playTrack': (req: { trackId: number; context?: number[]; index?: number }) => PlayerStatus
   'player:toggle': () => PlayerStatus
@@ -299,6 +358,7 @@ export const CHANNELS: readonly Channel[] = [
   'import:gmbDefaultPath', 'import:gmbBrowse', 'import:gmbPreview', 'import:gmbRun',
   'library:roots', 'library:addRoot', 'library:removeRoot', 'library:scan', 'library:scanCancel',
   'tracks:mergePreview', 'tracks:merge', 'tracks:unmerge', 'tracks:duplicates',
+  'tracks:details', 'tracks:reveal',
   'player:status', 'player:playTrack', 'player:toggle', 'player:next', 'player:previous',
   'player:stop', 'player:seek', 'player:volume', 'player:enqueue', 'player:dequeue',
   'player:clearQueue', 'player:repeat', 'player:shuffle'
