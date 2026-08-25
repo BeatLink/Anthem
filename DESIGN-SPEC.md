@@ -1106,8 +1106,15 @@ Details that matter, all pinned by tests:
 - A group spanning different albums says so in its explanation, because that is the case most
   likely to be a genuine second recording rather than a duplicate.
 
+Each proposal offers two actions: **Review**, which opens the side-by-side diff (§9.4.1.1), and
+**Quick merge**, which applies the defaults the preview already proposes — richest source survives,
+multi-value fields union, statistics combine. Quick merge is only defensible because it is undoable:
+the button is replaced in place by an **Undo** control rather than the merge disappearing into a
+history view the user has to go find.
+
 Still to do: rule-based keeper pre-selection (highest bitrate, preferred format, oldest added), and
-a batch mode for the `certain` groups.
+a batch "merge every certain group" action — worth having, but it should report per-group outcomes
+the same way the scan does (§9.1) rather than a single summary.
 
 ### 9.4 Merging tracks by hand — implemented
 

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { ipc } from '../../lib/ipc'
-  import type { DuplicateGroup, DuplicateReason } from '@shared/ipc'
+  import type { DuplicateGroup, DuplicateReason, MergeResult } from '@shared/ipc'
   import MergeView from '../MergeView.svelte'
   import { library } from '../../stores/library.svelte'
 
@@ -24,6 +24,49 @@
   })
 
   const MAX_SHOWN = 200
+
+  // Per-group outcome, so a quick merge reports in place rather than reshuffling the list.
+  let done = $state<Record<string, MergeResult>>({})
+  let working = $state<Record<string, boolean>>({})
+  let groupError = $state<Record<string, string>>({})
+
+  /**
+   * Merge with the defaults the preview already proposes — richest source survives, multi-value
+   * fields union, statistics combine. Safe to offer because it is undoable, and the undo control
+   * replaces the button rather than being hidden behind a history view.
+   */
+  async function quickMerge(g: DuplicateGroup): Promise<void> {
+    working = { ...working, [g.key]: true }
+    groupError = { ...groupError, [g.key]: '' }
+    try {
+      const ids = g.members.map((m) => m.trackId)
+      const preview = await ipc('tracks:mergePreview', ids)
+      const result = await ipc('tracks:merge', { ids, survivor: preview.survivor })
+      done = { ...done, [g.key]: result }
+      await library.refresh()
+    } catch (err) {
+      groupError = { ...groupError, [g.key]: (err as Error).message }
+    } finally {
+      working = { ...working, [g.key]: false }
+    }
+  }
+
+  async function undoGroup(key: string): Promise<void> {
+    const r = done[key]
+    if (!r) return
+    working = { ...working, [key]: true }
+    try {
+      await ipc('tracks:unmerge', r.batchId)
+      const next = { ...done }
+      delete next[key]
+      done = next
+      await library.refresh()
+    } catch (err) {
+      groupError = { ...groupError, [key]: (err as Error).message }
+    } finally {
+      working = { ...working, [key]: false }
+    }
+  }
 
   async function find(): Promise<void> {
     busy = true
@@ -92,13 +135,37 @@
 
   <div class="groups">
     {#each groups as g (g.key)}
-      <article class="group {g.confidence}">
+      <article class="group {g.confidence}" class:merged={done[g.key]}>
         <div class="ghead">
           <span class="conf {g.confidence}">{g.confidence}</span>
-          <span class="why">{g.explanation}</span>
-          <button class="merge" onclick={() => (merging = g.members.map((m) => m.trackId))}>
-            Review &amp; merge
-          </button>
+          <span class="why">
+            {#if done[g.key]}
+              Merged into one track holding {done[g.key]!.mediaMoved + 1} files.
+            {:else if groupError[g.key]}
+              <span class="gerr">{groupError[g.key]}</span>
+            {:else}
+              {g.explanation}
+            {/if}
+          </span>
+
+          {#if done[g.key]}
+            <button class="undo" disabled={working[g.key]} onclick={() => undoGroup(g.key)}>
+              {working[g.key] ? 'Undoing…' : 'Undo'}
+            </button>
+          {:else}
+            <div class="gactions">
+              <button
+                class="quick"
+                disabled={working[g.key]}
+                title="Merge now using the defaults: richest source survives, genres and labels are
+combined, plays and ratings are combined. Undoable."
+                onclick={() => quickMerge(g)}
+              >{working[g.key] ? 'Merging…' : 'Quick merge'}</button>
+              <button class="merge" onclick={() => (merging = g.members.map((m) => m.trackId))}>
+                Review
+              </button>
+            </div>
+          {/if}
         </div>
         <table>
           <thead>
@@ -210,7 +277,19 @@
   .conf.possible { color: var(--status-warning-text); background: color-mix(in srgb, var(--status-warning) 16%, transparent); }
 
   .why { font-size: var(--font-size-sm); color: var(--text-secondary); }
-  .merge { height: var(--control-height-sm); font-size: var(--font-size-sm); }
+  .gerr { color: var(--status-danger); }
+
+  .gactions { display: flex; gap: var(--space-2); }
+  .merge, .quick, .undo { height: var(--control-height-sm); font-size: var(--font-size-sm); }
+
+  .quick {
+    color: var(--text-on-fill);
+    background: var(--accent);
+    border-color: transparent;
+  }
+
+  .group.merged { opacity: 0.72; }
+  .group.merged table { display: none; }
 
   table { width: 100%; border-collapse: collapse; font-size: var(--font-size-sm); }
   th { text-align: left; font-weight: 500; color: var(--text-tertiary); }
