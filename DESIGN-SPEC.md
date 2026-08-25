@@ -1,6 +1,6 @@
 # Anthem — Design Specification
 
-**Status:** draft v0.1 · greenfield · nothing built yet
+**Status:** v0.3 · skeleton implemented · see README.md for what runs today
 **One line:** a desktop music player with gmusicbrowser's data model and power, a web-technology UI
 that users can re-layout and re-skin, and Halon as its reference theme.
 
@@ -46,64 +46,102 @@ Anthem keeps the model and replaces the substrate:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│  Renderer (WebView)  —  TypeScript · Svelte 5 · Vite                │
+│  Renderer (Chromium)  —  TypeScript · Svelte 5 · Vite               │
+│  Deliberately thin: it maps state to pixels and nothing else.       │
 │                                                                     │
 │  ┌───────────────┐  ┌──────────────┐  ┌────────────────────────┐    │
 │  │ Layout engine │  │ Widget       │  │ Theme runtime          │    │
 │  │ (JSON → tree) │  │ registry     │  │ (tokens → CSS vars)    │    │
 │  └───────────────┘  └──────────────┘  └────────────────────────┘    │
-│  ┌─────────────────────────────────────────────────────────────┐    │
-│  │ View-model stores: selection, filter stack, now-playing,    │    │
-│  │ virtualized row windows                                     │    │
-│  └─────────────────────────────────────────────────────────────┘    │
 └──────────────────────────────┬──────────────────────────────────────┘
-                    typed IPC (commands + event stream)
+              contextBridge IPC, typed by src/shared/ipc.ts
 ┌──────────────────────────────┴──────────────────────────────────────┐
-│  Core (Rust)                                                        │
+│  src/shared/  —  imported by BOTH sides, framework-free, no DOM     │
+│                                                                     │
+│  field descriptors · filter AST · format strings · view state       │
+│  (selection, sort, filter stack, virtualization maths) · IPC types   │
+└──────────────────────────────┬──────────────────────────────────────┘
+┌──────────────────────────────┴──────────────────────────────────────┐
+│  Main process (Node)                                                │
 │                                                                     │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐   │
 │  │ Library  │ │ Query    │ │ Tag I/O  │ │ Playback │ │ Services │   │
-│  │ index    │ │ engine   │ │ (lofty)  │ │ engine   │ │ MPRIS,   │   │
-│  │          │ │ AST→SQL  │ │          │ │ (mpv)    │ │ scrobble │   │
-│  │          │ │ AST→pred │ │          │ │          │ │ hotkeys  │   │
+│  │ index    │ │ AST→SQL  │ │ TagIO    │ │ Engine   │ │ MPRIS,   │   │
+│  │ scanner  │ │ AST→pred │ │ iface    │ │ iface    │ │ scrobble │   │
+│  │ hashing  │ │          │ │ (taglib) │ │ (mpv)    │ │ hotkeys  │   │
 │  └────┬─────┘ └────┬─────┘ └────┬─────┘ └────┬─────┘ └──────────┘   │
 │       └────────────┴────────────┴────────────┘                      │
-│                    SQLite (WAL) + FTS5                              │
+│              SQLite (WAL, STRICT) + FTS5                            │
+│                                                                     │
+│  worker_threads: scan · hash · index-build · replaygain             │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-### 2.1 Shell: Tauri 2
+### 2.1 Shell: Electron
 
-Chosen over Electron. Reasons that actually matter here: the process that must be fast is the
-library index, and that is Rust either way; Tauri's ~10 MB binary and ~80 MB resident beats
-Electron's ~150 MB baseline for an app people leave running for weeks; and the tag/decode/filesystem
-work wants native libraries, not N-API bindings.
+Chosen over Tauri after the evaluation in Appendix A. The short version: mpv neutralizes the
+playback argument, SQLite neutralizes most of the query argument, and scanning speed is background
+work — which strips Rust's advantage down to memory footprint and headroom above ~250k tracks. That
+is not worth a 2–3× slowdown in every UI iteration on a project whose two headline features (§5
+layout, §5.4 theming) are both UI work.
 
-The cost is honest: WebView2/WebKitGTK/WKWebView are three engines, not one, and CSS that works in
-Chromium can break in WebKitGTK. Mitigation: a documented CSS baseline (§6.4) and CI screenshot
-tests on all three.
+One rendering engine instead of three is a real secondary win: `:has()`, container queries and
+subgrid are all available, and the CSS baseline restrictions that a WebView-per-platform shell would
+impose (§6.4) do not apply.
 
-**Rejected:** Electron (memory, and no benefit once the core is Rust), pure-web/PWA (no tag writing,
-no gapless, no filesystem watch), native GTK/Qt (defeats the whole customization premise).
+The honest cost: ~150 MB install and ~350–500 MB resident for an app people leave running for weeks.
+
+**Rejected:** Tauri/Rust (see Appendix A.4 Stack A — reversal triggers are listed in §16), Python
+core (worst packaging story, and the UI is TypeScript regardless, so it buys two languages for one
+benefit), pure web/PWA (no tag writing, no gapless, no filesystem watch).
 
 ### 2.2 Renderer: TypeScript + Svelte 5 + Vite
 
-Svelte 5 runes over React because the two hot paths — a 250k-row virtualized list and a 20 Hz
-playback-position tick — are exactly where React's re-render accounting costs the most, and because
-the layout engine is data-driven enough that the component ecosystem advantage of React barely
-applies. Everything below the widget registry is hand-rolled regardless.
+Svelte 5 runes over React because the two hot paths — a 250k-row virtualized list and a playback
+position tick — are where React's re-render accounting costs most, and because scoped
+token-only styling is built into Svelte SFCs rather than being a separate decision.
 
-If this turns out wrong it is recoverable: the widget registry is the only React-shaped seam, and
-widgets are small.
+**This choice is deliberately made cheap to reverse.** See §2.4: everything that is expensive to
+rewrite lives outside the renderer. The strongest argument for React is `dnd-kit` for the M7 layout
+editor; if that becomes binding, the port is a handful of thin components.
 
 ### 2.3 Process model
 
-Single Tauri process; the Rust core runs the library and query work on a dedicated thread pool
-(`tokio` + `rayon` for scans). Playback lives in its own thread with its own event loop so a slow
-library scan can never stutter audio. The scanner is a separate task with a bounded channel back to
-the index — a full rescan must never block the UI or the query engine's read path.
+Three execution contexts, and the split is not optional:
 
----
+- **Main** — library, query engine, tag I/O, playback supervision, services. Owns the SQLite
+  connection; nothing else may open the database.
+- **`worker_threads` pool** — scanning, hashing, index building, ReplayGain analysis. Mandatory,
+  not an optimization: a blocked main thread stalls playback *control* and the UI simultaneously.
+- **Renderer** — presentation. No Node integration, `contextIsolation` on, and a strict CSP.
+
+IPC is `contextBridge` over the contract in `src/shared/ipc.ts`. Because both sides import the same
+module, the boundary is typechecked end to end with no codegen step.
+
+### 2.4 The UI-agnostic boundary
+
+The single most valuable structural decision in the codebase: **anything expensive to rewrite lives
+outside the renderer.**
+
+`src/shared/` is plain TypeScript with no framework primitives, no reactivity library, and no DOM
+access. It holds:
+
+| Module | What it owns |
+|---|---|
+| `fields.ts` | Field descriptors: storage, filter operators, tag mappings, stable numeric ids |
+| `filter.ts` | The filter AST, its operators, composition and cycle detection |
+| `format.ts` | The format-string language (§5.5) — labels, tray text, the file renamer |
+| `view.ts` | Selection model, sort state, filter stack, virtualization arithmetic |
+| `ipc.ts` | The IPC contract |
+
+`view.ts` deserves the emphasis. Anchored range selection, multi-key sort with shift-click
+semantics, the filter stack that collapses to an AST, and the arithmetic deciding which rows a
+viewport needs are all framework-neutral logic that every list widget shares. Implementing that
+correctly is days of work; expressing it in a UI framework is hours. Keeping it in `shared/` means a
+framework change — or a second front end, such as a remote web UI — re-does the hours, not the days.
+
+The renderer is therefore expected to stay small: a widget registry, a layout tree renderer, thin
+reactive wrappers over `shared/` classes, and CSS.
 
 ## 3. Data model
 
@@ -193,81 +231,161 @@ function, edit widget, and tag serialization.
 | `path` | prefix-tree grouped | `under`, `is`, `contains`, `regex` |
 | `enum` | closed value set | `is`, `in`, `empty` |
 
-### 3.4 SQLite schema (abridged)
+### 3.4 The entity model: a track is not a file
+
+**This is the load-bearing decision in Anthem, and it is what the database being the source of truth
+actually means.**
+
+A `track` is a logical piece of music. It survives renames, moves, format changes, retagging, and
+having no file at all. Anything that can *render* it is a `media` row hanging off it:
+
+| Case | Representation |
+|---|---|
+| An ordinary file | one `media` row, `kind='file'` |
+| Same album in FLAC and MP3 | two `media` rows on one track |
+| A CUE range inside a big rip | `media` rows sharing a `uri`, with `subtrack_index`, `start_ms`, `end_ms` |
+| An audiobook chapter | identical shape to a CUE range |
+| A streaming provider | `media` row with `kind='stream'` and a provider URI |
+| A file on a disconnected drive | `media` row with `present = 0` — flagged, never deleted |
+| A track you don't have yet | a track with **zero** media rows |
+
+Consequences that fall out for free:
+
+- **Statistics belong to the music, not the file.** Rating, play count and history live on `tracks`,
+  so re-ripping an album in a better format loses nothing.
+- **§17.2 is resolved.** CUE support is no longer a schema question; it is a parser plus a playback
+  flag, because `media` already addresses ranges.
+- **Streaming is not a special case.** A provider source is one more `media` kind, so smart
+  playlists, ratings and filters work across local and remote without a second code path.
+- **Missing files stop being destructive.** Losing a drive flags media, not tracks.
+
+### 3.5 Two identities, deliberately separate
+
+The most common modelling mistake here is to conflate two different questions. Anthem answers them
+with different mechanisms:
+
+| Question | Mechanism | Properties |
+|---|---|---|
+| *Did this file move or get renamed?* | **audio content hash** (`media.audio_hash`) | exact, offline, deterministic, no service |
+| *Are these two files the same song?* | MBID → AcoustID → fuzzy, always confirmable | probabilistic, needs network, user-pinnable |
+
+**The audio content hash** is computed over the audio stream with every metadata region excluded, so
+retagging a file never changes its hash. FLAC gets this free — its STREAMINFO block already carries
+an MD5 of the decoded audio. Tagged container formats get their frame region hashed with the ID3v2
+header, ID3v1 trailer and APE tag skipped. Anything else falls back to a whole-file hash, which is
+still stable under moves but not under retagging; the algorithm used is recorded per media row in
+`audio_hash_algo` so the weaker cases are visible rather than silently assumed.
+
+**AcoustID is a hint, never a key.** It was evaluated as the primary identifier and rejected:
+
+1. **It is not unique to a recording by design.** The AcoustID↔MusicBrainz-recording mapping is
+   many-to-many. One AcoustID commonly points at several recordings and one recording has many
+   AcoustIDs. This is why Picard does not blindly trust it. As a primary key it fails on its own
+   terms before any collision argument.
+2. **Matching is by similarity threshold, not equality** — that is how a 128 kbps MP3 matches a
+   FLAC. So "collision probability" is not governed by the ID space, and birthday-paradox reasoning
+   does not apply. False positives cluster in predictable categories: silence and near-silence,
+   tracks under ~30 seconds, radio edits sharing a long intro with the album version, and remasters
+   (inconsistently, in both directions).
+3. **It requires the network.** Fingerprints can be computed offline, but the AcoustID itself is
+   assigned by a web service. Keying the library on it makes the library unopenable offline.
+4. **Fingerprinting means decoding ~120 s of every file** — a full read of the library and many
+   hours of CPU at 250k tracks.
+5. **Coverage is partial.** Own recordings, bootlegs, obscure releases and podcasts get nothing —
+   exactly the files no external service can help with.
+
+So `tracks.acoustid` exists as evidence, alongside `mb_recording_id`, and `identity_source` records
+which one actually decided the grouping (`manual` | `mbid` | `acoustid` | `audio_hash` |
+`heuristic`). `pinned = 1` marks a human decision that automated passes must never override — the
+same reversibility trick used for album identity in §17.1.
+
+### 3.5.1 Schema (abridged)
+
+The authoritative version is `src/main/db/migrations/001-initial.sql`.
 
 ```sql
 CREATE TABLE tracks (
-  id            INTEGER PRIMARY KEY,
-  path          TEXT NOT NULL UNIQUE,
-  folder_id     INTEGER NOT NULL REFERENCES folders(id),
-  filesize      INTEGER, mtime INTEGER, added INTEGER NOT NULL,
-  title         TEXT, album_id INTEGER REFERENCES albums(id),
-  year          INTEGER, track_number INTEGER, disc_number INTEGER,
-  length_ms     INTEGER, codec TEXT, bitrate INTEGER, samplerate INTEGER, channels INTEGER,
-  rating        INTEGER,          -- NULL = unrated
-  play_count    INTEGER NOT NULL DEFAULT 0,
-  skip_count    INTEGER NOT NULL DEFAULT 0,
-  last_played   INTEGER, last_skipped INTEGER,
-  rg_track_gain REAL, rg_album_gain REAL,
-  missing       INTEGER NOT NULL DEFAULT 0,
-  content_hash  BLOB
+  id              INTEGER PRIMARY KEY,
+  title           TEXT,
+  album_id        INTEGER REFERENCES albums(id) ON DELETE SET NULL,
+  year            INTEGER, track_number INTEGER, disc_number INTEGER, length_ms INTEGER,
+
+  mb_recording_id TEXT,
+  acoustid        TEXT,                            -- a hint, never a key
+  identity_source TEXT NOT NULL DEFAULT 'heuristic',
+  identity_key    TEXT,
+  pinned          INTEGER NOT NULL DEFAULT 0,      -- a human decided; do not re-derive
+
+  rating          INTEGER,                         -- 0..100; NULL is unrated, which is not 0
+  play_count      INTEGER NOT NULL DEFAULT 0,
+  skip_count      INTEGER NOT NULL DEFAULT 0,
+  last_played     INTEGER, last_skipped INTEGER, bookmark_ms INTEGER,
+
+  added           INTEGER NOT NULL, modified INTEGER NOT NULL,
+  primary_media_id INTEGER REFERENCES media(id) ON DELETE SET NULL
 ) STRICT;
 
--- multi-value fields, one table, field_id-discriminated
-CREATE TABLE track_values (
-  track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
-  field_id INTEGER NOT NULL,
-  value_id INTEGER NOT NULL REFERENCES values_(id),
-  ordinal  INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY (track_id, field_id, ordinal)
-) WITHOUT ROWID;
-CREATE INDEX track_values_lookup ON track_values(field_id, value_id, track_id);
+CREATE TABLE media (
+  id              INTEGER PRIMARY KEY,
+  track_id        INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+  kind            TEXT NOT NULL,                   -- 'file' | 'stream'
+  uri             TEXT NOT NULL,
+  provider        TEXT,
 
-CREATE TABLE values_ (              -- interned strings for every set-typed field
-  id INTEGER PRIMARY KEY, field_id INTEGER NOT NULL,
-  value TEXT NOT NULL, sort_key TEXT, colour TEXT,
-  UNIQUE(field_id, value)
-);
+  subtrack_index  INTEGER NOT NULL DEFAULT 0,      -- CUE ranges and chapters
+  start_ms        INTEGER, end_ms INTEGER,
 
--- user-defined fields land here, no migration required
-CREATE TABLE track_extras (
-  track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
-  field_id INTEGER NOT NULL, value BLOB,
-  PRIMARY KEY (track_id, field_id)
-) WITHOUT ROWID;
+  audio_hash      BLOB,                            -- identity of the FILE (§3.5)
+  audio_hash_algo TEXT,
 
-CREATE VIRTUAL TABLE tracks_fts USING fts5(
-  title, artist, album, album_artist, genre, comment, lyrics,
-  content='', tokenize="unicode61 remove_diacritics 2"
-);
+  codec TEXT, bitrate INTEGER, samplerate INTEGER, channels INTEGER,
+  filesize INTEGER, mtime INTEGER,
 
-CREATE TABLE play_history (
-  track_id INTEGER NOT NULL, at INTEGER NOT NULL,
-  kind INTEGER NOT NULL,          -- 0 play, 1 skip
-  position_ms INTEGER
-);
+  present         INTEGER NOT NULL DEFAULT 1,      -- 0 = known but unreachable
+  quality_rank    INTEGER NOT NULL DEFAULT 0,      -- which source to prefer
+  added           INTEGER NOT NULL,
+  UNIQUE(uri, subtrack_index)
+) STRICT;
 ```
 
-Design notes:
-- `values_` interning is what makes "group all 250k tracks by genre" a join over small integers.
-- `track_extras` means a user field never triggers `ALTER TABLE` on a huge table.
-- FTS5 with `content=''` (contentless) keeps the index small; we rebuild rows on tag write.
-- `STRICT` tables, `PRAGMA journal_mode=WAL`, `synchronous=NORMAL`, `foreign_keys=ON`.
+Plus `albums` (stable id, derived `match_key`, `pinned` — see §17.1), `values_` + `track_values`
+(interned multi-value fields), `track_extras` (user-defined and long-form fields, so a new field
+never means `ALTER TABLE` on a huge table), `media_tags` (raw per-source tags, so two files backing
+one track can disagree without the disagreement being lost), `tracks_fts` (contentless FTS5),
+`play_history`, `tag_writes` (the undo journal), `playlists`, `roots`, `settings`.
 
-### 3.5 In-memory index
+Settings: `journal_mode=WAL`, `synchronous=NORMAL`, `foreign_keys=ON`, `STRICT` tables throughout.
+
+### 3.5.2 Field storage kinds
+
+A field descriptor's `storage` determines how both compilers reach it:
+
+| Storage | Location | Filter semantics |
+|---|---|---|
+| `column` | a column on `tracks` | direct comparison |
+| `computed` | a SQL expression | direct comparison; the in-memory index materializes it |
+| `multi` | `track_values` + `values_` | set semantics: any / all / none / count |
+| `extra` | `track_extras` | direct comparison; for user-defined and long-form fields |
+| `media` | a column on `media` | **matches when ANY of the track's media matches** |
+
+The `media` kind is what makes "I have this in FLAC" and "show me everything under /music/live"
+behave correctly on a track that has several sources. Sorting and grouping on a `media` field use
+the preferred source (`quality_rank DESC, id`).
+
+### 3.5.3 In-memory index
 
 SQLite is durable truth; it is not fast enough for interactive group-by over 250k rows at 60 fps.
-The core keeps a columnar mirror, loaded at startup (target: <1.5 s for 250k tracks):
+The main process keeps a columnar mirror, built inside a worker and handed over as
+`SharedArrayBuffer` so the main thread never blocks on it:
 
-- Scalar fields → typed `Vec<T>` parallel arrays, indexed by a dense `TrackIdx` (not row id).
-- Set fields → roaring bitmaps per value id. `genre = Rock` is a bitmap lookup; `Rock AND NOT Live`
-  is two bitmap ops.
-- Strings → interned `Arc<str>` in a global symbol table with precomputed collation keys.
-- Filters produce a `RoaringBitmap`; sorts produce a `Vec<TrackIdx>`; the UI receives only the
-  windows it renders.
+- Scalar fields → `Int32Array` / `Float64Array` columns, indexed by a dense `TrackIdx` (not row id).
+- Set fields → roaring bitmaps (`roaring-wasm`) per value id. `genre = Rock` is a bitmap lookup;
+  `Rock AND NOT Live` is two bitmap operations.
+- Strings → an interned symbol table with precomputed `Intl.Collator` sort keys.
+- Computed fields are materialized, because the native predicate cannot run SQL expressions.
 
-Memory budget: ~120 bytes/track of scalars + interned strings ≈ **under 250 MB at 1 million tracks**.
-Above that, the index degrades gracefully to SQL-only mode (documented, not silent).
+Filters produce a bitmap; sorts produce an index vector; the renderer receives only the windows it
+draws. Above ~1M tracks the index degrades to SQL-only mode — documented, not silent.
 
 ### 3.6 Ratings
 
@@ -717,76 +835,136 @@ Deferred past v1, but the seams are designed now so it is not a rewrite:
 
 | Operation | Library size | Budget |
 |---|---|---|
-| Cold start → interactive | 250k | 3 s |
-| In-memory index load | 250k | 1.5 s |
-| Filter (any AST) | 250k | 100 ms |
-| Sort by any column | 250k | 150 ms |
-| Group-by for a filter pane | 250k | 80 ms |
-| Search keystroke → results | 250k | 50 ms |
+| Cold start → interactive | 250k | 4 s |
+| In-memory index load | 250k | 2.5 s |
+| Filter (any AST) | 250k | 150 ms |
+| Sort by any column | 250k | 250 ms |
+| Group-by for a filter pane | 250k | 120 ms |
+| Search keystroke → results | 250k | 60 ms |
 | Scroll frame | any | 16 ms |
+| Full scan | 100k files | 10 min |
 | Track change (gapless) | any | 0 audible gap |
 | Idle CPU (playing) | any | < 1% |
-| Idle RSS (playing) | 250k | < 400 MB |
+| Idle RSS (playing) | 250k | < 600 MB |
+| Install size | — | ~150 MB |
 
-Enforced by a benchmark suite over three generated corpora (10k / 100k / 1M) that runs in CI and
-fails on regression beyond 15%.
+Enforced by `bench/query.bench.ts`, which runs the real compilers against generated corpora
+(`ANTHEM_BENCH_SIZE` selects the size) and is intended to fail CI on regression beyond 15%.
 
----
+**Measured at 20k tracks on the development machine**, for calibration rather than as a claim about
+the 250k target:
+
+| Operation | Mean |
+|---|---|
+| Simple scalar predicate (SQL) | 1.6 ms |
+| Compound predicate — sets, dates, negation (SQL) | 11.7 ms |
+| Compound predicate (native) | 5.9 ms |
+| Group by genre (multi-value) | 13.9 ms |
+| Sort by album then track number | 31.4 ms |
+
+Two honest readings of that table. First, the native predicate is ~2× the SQL path on compound
+filters, which is the gap the in-memory index is meant to widen. Second, **sort does not extrapolate
+inside budget**: 31 ms at 20k is ~390 ms at 250k, over the 250 ms line. The cause is known — sorting
+on `album` currently runs a correlated subquery per row because `album` is a computed field — and the
+fix (join, or materialize in the index) is scheduled with the index work in M1.
 
 ## 13. Testing
 
-- **Property tests** (`proptest`): AST → SQL and AST → predicate must agree, for generated ASTs over
-  a generated library. Format-string parsing round-trips. Filter serialization round-trips.
-- **Golden-file tests** for tag I/O: a corpus of real-world-ugly files (broken ID3 sizes, mixed
-  encodings, huge APIC frames, v1+v2 disagreement, Unicode edge cases) with expected read output and
-  byte-compared write output.
-- **Snapshot tests** for layout rendering across the three WebView engines, via Playwright against a
-  browser-hosted renderer plus a real-shell smoke test per platform.
-- **Fuzzing** on the tag reader and the smart-string parser — both eat untrusted input.
-- Playback is verified by a null-sink engine implementation that asserts the state machine, plus a
-  manual gapless checklist against a known-gapless album per release.
+Vitest, with `fast-check` for property tests. Tests reach SQLite through Node's built-in
+`node:sqlite` rather than `better-sqlite3`, so the suite never depends on which ABI the native
+module was last rebuilt for — the SQL under test is identical either way.
 
----
+### 13.1 The load-bearing test
+
+`test/property/ast-agreement.test.ts`: for any generated filter over any generated library, the SQL
+compiler and the native predicate must return **identical id sets**. The fast path exists only
+because this test keeps it honest.
+
+It has already earned its place. It caught a three-valued-logic divergence: SQL's `NOT (year = 0)`
+evaluates to NULL for a track with no year and therefore excludes it, while the native predicate
+included it. The resolution is a decided semantic, not a patch:
+
+> **Anthem uses two-valued logic.** A predicate is true or false for a track, never unknown. A
+> missing value fails the predicate, and negation flips that. So "not rated 5 stars" includes
+> unrated tracks, which is what a listener means.
+
+The SQL compiler wraps every negation in `COALESCE(..., 0)` to enforce it.
+
+### 13.2 The rest of the suite
+
+| Suite | Asserts |
+|---|---|
+| `unit/filter-compile.test.ts` | Operator semantics, parameterization (no interpolation), set algebra, NULL ordering, rejection of type-invalid operators |
+| `unit/entity-model.test.ts` | The §3.4 invariants: tracks with zero media, one track with many media, stats surviving media deletion, cascade on track deletion, CUE ranges as ordinary rows, missing files flagged not deleted, album ids stable across match-key changes, FK and STRICT enforcement |
+| `unit/audio-hash.test.ts` | Hash unchanged by ID3v2 growth, ID3v1 addition and rename; FLAC STREAMINFO used when valid and ignored when zero; different audio distinguished |
+| `unit/fields.test.ts` | Field id uniqueness and **numeric id stability** — a reused id silently corrupts every library on disk, so the pins are a compatibility lock |
+| `unit/format.test.ts` | The format-string grammar, including bracketed-group elision and the renamer pattern end to end |
+| `unit/view.test.ts` | Virtualization arithmetic, anchored range selection, filter-stack collapse to an AST, multi-key sort priority |
+| `bench/query.bench.ts` | The §12 budgets |
+
+### 13.3 Planned, not yet written
+
+- **Golden-file tag tests** — a corpus of real-world-ugly files (broken ID3 sizes, mixed encodings,
+  huge APIC frames, v1/v2 disagreement, Unicode edge cases) with byte-compared write output. This
+  becomes the highest-priority suite the moment tag I/O lands, because it is what validates the
+  `TagIO` escape hatch in Appendix A.5.
+- **Fuzzing** on the tag reader and the smart-string parser — both eat untrusted input.
+- **Playback state machine** against a null-sink engine, plus a manual gapless checklist per release.
+- **Renderer snapshots** via Playwright. One engine, not three.
 
 ## 14. Repository layout
 
 ```
 anthem/
-├── crates/
-│   ├── anthem-core/        # library index, query engine, field system
-│   ├── anthem-db/          # SQLite schema, migrations, DAO
-│   ├── anthem-tags/        # lofty wrapper, write journal, mass ops
-│   ├── anthem-play/        # PlaybackEngine trait + mpv backend
-│   ├── anthem-scan/        # walker, watcher, hashing, dedupe
-│   ├── anthem-svc/         # MPRIS, scrobble, hotkeys, HTTP API
-│   └── anthem-cli/         # anthemctl
-├── src-tauri/              # shell, IPC surface, packaging
-├── ui/
-│   ├── src/
-│   │   ├── layout/         # layout engine, inspector, patching
-│   │   ├── widgets/        # widget registry + built-ins
-│   │   ├── theme/          # token runtime, theme loader
-│   │   ├── stores/         # view models
-│   │   └── lib/            # virtualization, format strings, ipc client
-│   └── themes/
-│       ├── halon-light/
-│       └── halon-dark/
-├── layouts/                # shipped layout documents
-├── fields/                 # built-in field descriptors
-├── docs/
-└── bench/
+├── src/
+│   ├── main/                 # Electron main process
+│   │   ├── db/               # schema, migrations, pragmas, DAO
+│   │   │   └── migrations/   # 001-initial.sql — the authoritative schema
+│   │   ├── library/          # audio-hash, (planned) scanner, watcher, dedupe
+│   │   ├── query/            # compile.ts (AST→SQL), evaluate.ts (AST→predicate)
+│   │   ├── tags/             # (planned) TagIO interface + implementation + write journal
+│   │   ├── play/             # (planned) PlaybackEngine interface + mpv backend
+│   │   ├── services/         # (planned) MPRIS, scrobble, hotkeys, HTTP API
+│   │   ├── ipc.ts            # channel handlers, typed by the shared contract
+│   │   └── index.ts          # app lifecycle and window
+│   ├── preload/              # contextBridge, exposing only declared channels
+│   ├── renderer/             # UI — deliberately thin (§2.4)
+│   │   ├── widgets/          # Sidebar, SongList, FilterPane, Stars, PlayerBar
+│   │   ├── stores/           # thin reactive wrappers over shared/
+│   │   ├── layout/           # (planned) layout engine and inspector
+│   │   └── theme/
+│   ├── shared/               # imported by BOTH sides — the UI-agnostic core
+│   │   ├── fields.ts         # field descriptors
+│   │   ├── filter.ts         # the filter AST
+│   │   ├── format.ts         # the format-string language
+│   │   ├── view.ts           # selection, sort, filter stack, virtualization maths
+│   │   └── ipc.ts            # the IPC contract
+│   └── workers/              # (planned) scan, hash, index-build, replaygain
+├── test/
+│   ├── helpers/              # corpus generator, node:sqlite harness, fast-check arbitraries
+│   ├── property/             # the AST-agreement test
+│   └── unit/
+├── bench/                    # performance budget benchmarks
+├── themes/halon/             # tokens.json + generated halon.css
+├── scripts/build-theme.mjs   # tokens → CSS custom properties
+├── layouts/  fields/  docs/  cli/
+├── flake.nix                 # pins node, electron and mpv
+└── electron.vite.config.ts
 ```
-
----
 
 ## 15. Roadmap
 
-**M0 — Skeleton (1 wk).** Tauri shell, Vite/Svelte renderer, typed IPC codegen, CI on three
-platforms, Halon tokens → CSS variables, a window that opens and is already correctly themed.
+**M0 — Skeleton. ✅ done.** Electron shell, Vite/Svelte renderer, typed IPC via a shared contract,
+Halon tokens → CSS variables, Nix dev shell pinning node/electron/mpv. Went further than planned
+because the entity-model decision arrived early: the schema, both query compilers, audio content
+hashing, the field descriptor system, the format-string engine, framework-free view state, and a
+66-test harness including the AST-agreement property test all landed here. The app launches, migrates
+to schema v1 and opens a WAL database.
 
-**M1 — Library core (3 wk).** Schema + migrations, field descriptor system, scanner, tag reading,
-in-memory index, `songlist` widget with virtualization and column config. Milestone test: scan and
-scroll 100k tracks.
+**M1 — Library core (3 wk).** Scanner, watcher, tag reading, move detection via `audio_hash`, the
+in-memory index, and the `songlist` widget wired to `shared/view.ts` for real virtualization and
+column config. Also: fix the sort budget miss identified in §12. Schema and field descriptors are
+already done. Milestone test: scan and scroll 100k tracks.
 
 **M2 — Query engine (2 wk).** Filter AST, both compilation targets, the agreement property test,
 search bar parser, filter panes, filter stack chips.
@@ -821,27 +999,37 @@ visualizer library, multi-library support.
 
 | Decision | Reversal trigger |
 |---|---|
-| Tauri over Electron | WebKitGTK rendering divergence proves unfixable in M0–M1 |
-| Svelte 5 over React | Widget ecosystem need outweighs render cost — cheap to revisit, seam is small |
-| SQLite + in-memory mirror | Mirror memory exceeds budget at target sizes → SQL-only with better indexes |
-| libmpv default engine | Packaging friction on Windows/macOS → promote the symphonia backend |
-| lofty-rs for tags | A golden-file failure class it cannot fix → vendor a fork |
-| JSON layouts, not a DSL | Users find JSON hostile in practice → add a friendlier surface *above* JSON, never replace it |
+| **Electron + TypeScript** over Tauri + Rust | Idle RSS or million-track performance becomes binding; then Appendix A.4 Stack A, with `shared/` porting as the main cost |
+| **A track is a piece of music, not a file** (§3.4) | None foreseen. This is the decision everything else hangs off. |
+| **Audio content hash for file identity; AcoustID as a hint only** (§3.5) | None. AcoustID's many-to-many mapping to recordings rules it out as a key regardless of collision rate. |
+| **Two-valued filter logic** (§13.1) | User reports that "not X" excluding unknowns is expected; unlikely |
+| SQLite + in-memory mirror | Mirror memory exceeds budget → SQL-only with better indexes |
+| Svelte 5 over React | `dnd-kit` proves necessary for the M7 layout editor. Cheap by construction (§2.4). |
+| libmpv default engine | Packaging friction on Windows/macOS → promote a Web Audio or native fallback |
+| `node-taglib-sharp` for tags | Golden-file failures it cannot fix → swap the `TagIO` implementation for a mutagen sidecar (Appendix A.5) |
+| JSON layouts, not a DSL | Users find JSON hostile → add a friendlier surface *above* JSON, never replace it |
+| Stable numeric field ids | Never reversible. Reusing one corrupts every library already on disk. |
 
 ## 17. Open questions
 
-1. **Album identity.** See §17.1 below — expanded, because it is the decision most likely to be
-   discovered too late.
-2. **Multi-value artist storage.** Split `"A feat. B"` into two artists on import, or keep the raw
-   string and split only for display/filter? Proposal: store raw *and* derived, filter on derived —
-   costs storage, avoids destroying tags. Confirm before M1.
-3. **Stats write-back default.** Off is safer; on is what makes the library portable. Currently
-   specified off.
-4. **Video files.** gmusicbrowser tolerates them. Proposal: index and play audio-only, no video
+1. **Album identity.** Expanded in §17.1 — still the one schema-shaped decision left, though §17.1's
+   `pinned` mechanism makes the heuristic tunable after 1.0 rather than frozen.
+2. **CUE sheets.** Resolved by the entity model; see §17.2.
+3. **Multi-value artist storage.** Split `"A feat. B"` on import, or keep the raw string and split
+   only for display and filtering? Proposal: store raw *and* derived, filter on derived — costs
+   storage, never destroys a tag. `media_tags` already holds the raw per-source values, so this is
+   close to decided.
+4. **Stats write-back default.** Off is safer; on makes the library portable and survivable. Since
+   statistics now live on the track and a track may have several media, write-back also needs a
+   policy for *which* files receive them. Currently specified off.
+5. **Conflict policy.** The database is the source of truth, but files change underneath it. When a
+   scan finds a tag that disagrees with the database, which wins? Proposal: the database wins for
+   fields the user has edited (tracked per field), the file wins otherwise, and the disagreement is
+   always visible rather than silently resolved. Needs deciding before M1's scanner.
+6. **Video files.** gmusicbrowser tolerates them. Proposal: index and play audio-only, no video
    window, in v1.
-5. **CUE sheets.** See §17.2 below.
-6. **Multi-library / profiles.** Deferred, but the DB path and config path are already parameterized
-   so it stays possible.
+7. **Multi-library / profiles.** Deferred, but the database path is already parameterized
+   (`ANTHEM_DB`), so it stays possible.
 
 ### 17.1 Album identity (expanded)
 
@@ -895,55 +1083,31 @@ destroying user intent — which turns an irreversible schema decision into a tu
 different `year` means different album, with a one-click "merge these" in the album view. Splitting
 is a smaller annoyance than silently merging two masterings and computing one album gain across both.
 
-### 17.2 CUE sheets (expanded)
+### 17.2 CUE sheets — resolved by the entity model
 
-**What a CUE sheet is.** A single audio file — `Live at Leeds.flac`, a DJ mix, a full-album vinyl rip
-— plus a sidecar `.cue` text file (or a `CUESHEET` block embedded in the FLAC) that declares where
-each track starts. The tracks are real music but they are **not files**.
+**Status: no longer an open question.** This was the second schema-freezing decision in the v0.1
+draft, and §3.4 dissolved it.
 
-**The question is one line of schema.** Today the spec says:
+A CUE sheet describes track boundaries inside one audio file — a live album, a DJ mix, a vinyl rip.
+The original worry was that `path TEXT NOT NULL UNIQUE` assumed one row per file, and that changing
+it later would be invasive across five subsystems at once.
 
-```sql
-path TEXT NOT NULL UNIQUE       -- one row = one file
-```
+Under the track/media model, a CUE range is simply a `media` row that addresses part of a container:
+`uri` plus `subtrack_index`, `start_ms`, `end_ms`, with `UNIQUE(uri, subtrack_index)`. Whole-file
+media leave those at their defaults, so the common case pays nothing. `test/unit/entity-model.test.ts`
+pins the behaviour today, before any CUE parser exists.
 
-Supporting CUE means one row = one *time range in* a file, and that assumption is load-bearing in
-five places at once:
+What remains is ordinary feature work, scheduled rather than architectural: a `.cue` parser, reading
+FLAC's embedded `CUESHEET` block, and passing start/end to the playback engine. Tag writing needs a
+policy — per-subtrack tags cannot go into a shared container, so they live in the database or get
+written back into the `.cue`. Mass tagging must refuse or redirect rather than silently writing to
+the container.
 
-| Subsystem | What changes |
-|---|---|
-| Schema | `UNIQUE(path)` → `UNIQUE(path, subtrack_index)`; add `start_ms`, `end_ms` |
-| In-memory index | `TrackIdx` is no longer 1:1 with a file; the scanner emits N rows per path |
-| Playback | Seek to `start_ms`, stop at `end_ms`; gapless *between* subtracks is free and perfect |
-| Tag writing | You cannot write per-track tags into a shared container. Subtrack tags live only in Anthem's DB, or get written back into the `.cue`. Mass tagging must refuse or redirect. |
-| Move detection | Subtracks share one `content_hash`; §9.1's logic needs a per-path grouping |
-| Fields | `filesize` per track is meaningless; `length` comes from the cue, not the file |
+**The same shape covers** `.m4b` audiobook chapters and Opus chapter metadata, which were never
+listed as requirements but come along for free.
 
-**Why neither reference player helps here.** gmusicbrowser handles CUE only partially. Quod Libet
-4.7.1 has *no* CUE support at all — I checked its source; there is not a single reference to
-cuesheets in the codebase, and it is a decade-old open request there. So there is no prior art to
-copy, and no user expectation set by either.
-
-**Decision: reserve the schema at M1, ship the feature later.** Add the columns now with defaults
-that make them invisible:
-
-```sql
-subtrack_index INTEGER NOT NULL DEFAULT 0,
-start_ms       INTEGER,          -- NULL = whole file
-end_ms         INTEGER,
-UNIQUE(path, subtrack_index)
-```
-
-Three extra columns and a wider unique index cost effectively nothing at 250k rows, and the
-in-memory index gets built from row ids rather than paths from day one. That converts CUE from "an
-invasive M6 rewrite" into "an M-later parser plus a playback flag." If it never ships, the cost was
-three nullable columns.
-
-**Applies equally to:** embedded chapters in `.m4b` audiobooks and `.opus` chapter metadata, which
-have exactly the same shape. Reserving here reserves for those too.
-
-
----
+Worth noting: neither reference player solves this. gmusicbrowser is partial, and Quod Libet 4.7.1
+has no CUE support at all — verified against its source, where the string does not appear.
 
 ## 18. Feature parity backlog — gmusicbrowser and Quod Libet
 
@@ -1128,6 +1292,9 @@ this table is the record, and it gets edited in place rather than appended to.
 The v0.1 draft picked Rust without arguing the alternative. This appendix does the comparison
 properly, because "ease of development" is a legitimate first-order requirement, not a compromise.
 
+> **Outcome: Stack B was chosen and is implemented.** §2 is now written in terms of it, and this
+> appendix is kept as the reasoning record and as the reversal plan if §16's triggers fire.
+
 ### A.1 How much of this spec actually depends on the language?
 
 Very little. Sections 3 (data model), 4 (query engine), 5 (layout and theming), 6 (interaction),
@@ -1273,6 +1440,18 @@ queries — in Stack A that is either duplicated or code-generated.
 tag tests become the highest-priority suite in the repo, since they are what validates the A.5
 escape hatch. Playwright covers one engine instead of three.
 
-**§16 — Decisions table** gains: *TypeScript/Electron over Rust/Tauri — reverse if RSS or
-million-track performance becomes binding, or if golden-file tests condemn the JS tag layer and the
-mutagen sidecar proves awkward.*
+**§16 — Decisions table** records this, with its reversal triggers.
+
+### A.7 What the implementation confirmed
+
+Building the skeleton tested three of this appendix's claims:
+
+- **The `shared/` payoff is real and larger than argued.** The filter AST is imported by the SQL
+  compiler, the native predicate, the IPC contract and the UI that builds queries — one definition,
+  no codegen, and a type error at any misuse. A.1 called this the main structural benefit; it is.
+- **The native-module concern was overstated for tests.** Node's built-in `node:sqlite` runs the
+  real SQL without `better-sqlite3`, so the test suite is free of ABI juggling entirely. Only the app
+  needs the Electron-ABI build, and `better-sqlite3` loaded under Electron without incident.
+- **The tag-library risk (A.3) is untested**, because tag I/O is not written yet. It remains the one
+  place where Stack B is weakest, and the `TagIO` interface plus golden-file suite is still how that
+  gets settled rather than assumed.
