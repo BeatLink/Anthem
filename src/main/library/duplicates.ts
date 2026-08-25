@@ -59,17 +59,39 @@ function groupsByKey(db: Db, sql: string): { key: string; ids: number[] }[] {
     .filter((g) => g.ids.length > 1)
 }
 
+/**
+ * Bracketed noise worth ignoring when comparing titles. Deliberately a fixed list rather than
+ * "strip anything in brackets": that broader rule collapses "[Act 1]" and "[Act 2]" into the same
+ * title, which is a wrong merge rather than a missed one.
+ */
+const NOISE = new RegExp(
+  '[\\(\\[]\\s*(?:' + [
+    'official\\s+(?:music\\s+)?video', 'official\\s+audio', 'official\\s+lyric[s]?\\s+video',
+    'lyric[s]?\\s+video', 'lyrics', 'audio', 'video', 'visualizer',
+    'hd', 'hq', '4k', '1080p', '720p',
+    'no\\s+copyright\\s+music', 'copyright\\s+free', 'free\\s+download', 'free\\s+to\\s+use',
+    'explicit', 'clean', 'remaster(?:ed)?', 'deluxe', 'bonus\\s+track'
+  ].join('|') + ')\\s*[\\)\\]]',
+  'gi'
+)
+
+const FEATURED = /[\(\[]\s*(?:feat|ft|featuring|with)\.?\s[^)\]]*[\)\]]/gi
+
 const norm = (s: string | null): string =>
-  (s ?? '').toLocaleLowerCase().normalize('NFKD')
+  (s ?? '')
+    .toLocaleLowerCase()
+    .normalize('NFKD')
     .replace(/\p{Diacritic}/gu, '')
-    .replace(/\((?:feat|ft|featuring)\.?[^)]*\)/g, '')
-    .replace(/\[[^\]]*\]/g, '')
+    .replace(FEATURED, ' ')
+    .replace(NOISE, ' ')
     .replace(/[^\p{L}\p{N}]+/gu, ' ')
     .trim()
 
 export function findDuplicates(db: Db, opts: FindOptions = {}): DuplicateGroup[] {
+  // Fuzzy matching is left out by default: on a real library it proposes far more than a person
+  // can review, and most of it needs judgement. It is a deliberate deeper sweep, not a baseline.
   const reasons = new Set<DuplicateReason>(
-    opts.reasons ?? ['audio_hash', 'mb_recording_id', 'tags', 'fuzzy'])
+    opts.reasons ?? ['audio_hash', 'mb_recording_id', 'tags'])
   const tolerance = opts.lengthToleranceMs ?? 3000
   const out: DuplicateGroup[] = []
   const claimed = new Set<number>()

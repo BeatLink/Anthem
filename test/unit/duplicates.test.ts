@@ -94,6 +94,26 @@ describe('duplicate detection', () => {
     expect(groups[0]!.explanation).toMatch(/different albums/)
   })
 
+  it('keeps meaningfully different bracketed parts apart', () => {
+    // Stripping all bracketed text would call these one recording, which is a wrong merge.
+    makeTrack({ title: 'District Dash [Act 1]', artist: 'Score', lengthMs: 3_648_000 })
+    makeTrack({ title: 'District Dash [Act 2]', artist: 'Score', lengthMs: 3_648_000 })
+    expect(findDuplicates(db as never, { reasons: ['fuzzy'] })).toEqual([])
+  })
+
+  it('still ignores boilerplate suffixes that carry no meaning', () => {
+    makeTrack({ title: 'Runaways', artist: 'MegaEnx', lengthMs: 208_000 })
+    makeTrack({ title: 'Runaways [No Copyright Music]', artist: 'MegaEnx', lengthMs: 208_500 })
+    expect(findDuplicates(db as never, { reasons: ['fuzzy'] })).toHaveLength(1)
+  })
+
+  it('leaves fuzzy matching out unless it is asked for', () => {
+    makeTrack({ title: 'Same', artist: 'A', lengthMs: 200_000 })
+    makeTrack({ title: 'Same', artist: 'A', lengthMs: 200_000 })
+    expect(findDuplicates(db as never)).toEqual([])
+    expect(findDuplicates(db as never, { reasons: ['fuzzy'] })).toHaveLength(1)
+  })
+
   it('ignores diacritics and featured-artist suffixes', () => {
     makeTrack({ title: 'Cafe (feat. Someone)', artist: 'Bjork', lengthMs: 200_000 })
     makeTrack({ title: 'Café', artist: 'Björk', lengthMs: 200_500 })

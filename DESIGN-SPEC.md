@@ -1076,7 +1076,7 @@ evaluate is worse than none:
 | `audio_hash` | certain | Byte-identical audio content |
 | `mb_recording_id` | certain | Same MusicBrainz recording |
 | `tags` | likely | Same `identity_key`: artist, title and album, normalized |
-| `fuzzy` | possible | Same artist and title, ignoring album, with durations within a tolerance |
+| `fuzzy` | possible | Same artist and title, ignoring album, with durations within a tolerance. **Off by default.** |
 
 Details that matter, all pinned by tests:
 
@@ -1086,6 +1086,13 @@ Details that matter, all pinned by tests:
   and the original do not merge on title alone.
 - Normalization strips diacritics and `(feat. …)` suffixes, so *Café* by *Björk* groups with *Cafe*
   by *Bjork*.
+- **Bracketed text is not stripped wholesale.** An earlier version removed anything in brackets,
+  which collapsed `[Act 1]` and `[Act 2]` into one title — a wrong merge rather than a missed one.
+  Only a fixed list of boilerplate is ignored (`[Official Video]`, `[No Copyright Music]`,
+  `[Remastered]`, and similar). Found by running the finder against a real 5,132-track library,
+  which is also why fuzzy is off by default: with it on, that library produced **1,903** fuzzy
+  proposals — more than anyone will review, and a signal nobody would trust. With it off, the same
+  library yields **21** actionable groups.
 - A group spanning different albums says so in its explanation, because that is the case most
   likely to be a genuine second recording rather than a duplicate.
 

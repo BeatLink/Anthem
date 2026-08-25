@@ -14,12 +14,15 @@
     { id: 'audio_hash', label: 'Identical audio', hint: 'Byte-identical content' },
     { id: 'mb_recording_id', label: 'MusicBrainz id', hint: 'Same tagged recording' },
     { id: 'tags', label: 'Matching tags', hint: 'Same artist, title and album' },
-    { id: 'fuzzy', label: 'Similar', hint: 'Same artist and title, similar length' }
+    { id: 'fuzzy', label: 'Similar', hint: 'Same artist and title, similar length — noisy, needs review' }
   ]
 
+  // Fuzzy is off by default: on a real library it proposes far more than anyone can review.
   let enabled = $state<Record<DuplicateReason, boolean>>({
-    audio_hash: true, mb_recording_id: true, tags: true, fuzzy: true
+    audio_hash: true, mb_recording_id: true, tags: true, fuzzy: false
   })
+
+  const MAX_SHOWN = 200
 
   async function find(): Promise<void> {
     busy = true
@@ -27,7 +30,8 @@
     try {
       groups = await window.anthem['tracks:duplicates']({
         reasons: REASONS.map((r) => r.id).filter((r) => enabled[r]),
-        lengthToleranceMs: tolerance * 1000
+        lengthToleranceMs: tolerance * 1000,
+        limit: MAX_SHOWN
       })
       ran = true
     } catch (err) {
@@ -58,6 +62,7 @@
     {#each REASONS as r (r.id)}
       <label title={r.hint}>
         <input type="checkbox" bind:checked={enabled[r.id]} /> {r.label}
+        {#if r.id === 'fuzzy'}<span class="warnish">noisy</span>{/if}
       </label>
     {/each}
     <label class="tol">
@@ -73,6 +78,7 @@
     {#if ran && !busy}
       <span class="hint">
         {groups.length} group{groups.length === 1 ? '' : 's'} · {total} tracks
+        {#if groups.length >= MAX_SHOWN}(showing the first {MAX_SHOWN}){/if}
       </span>
     {/if}
   </div>
@@ -144,6 +150,15 @@
   .opts { display: flex; flex-wrap: wrap; gap: var(--space-4); align-items: center; }
   label { display: flex; gap: var(--space-2); align-items: center; font-size: var(--font-size-sm); }
   .tol input { width: 56px; height: var(--control-height-sm); }
+
+  .warnish {
+    padding: 0 var(--space-2);
+    font-size: 10px;
+    text-transform: uppercase;
+    color: var(--status-warning-text);
+    background: color-mix(in srgb, var(--status-warning) 16%, transparent);
+    border-radius: var(--radius-full);
+  }
 
   .actions { display: flex; gap: var(--space-3); align-items: center; }
 

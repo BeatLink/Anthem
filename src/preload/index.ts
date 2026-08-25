@@ -1,11 +1,11 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import {
-  CHANNELS, EVENT_CHANNEL, type AnthemApi, type AnthemEvents, type Channel, type EventName
+  CHANNELS, EVENT_CHANNEL, toCloneable, type AnthemApi, type AnthemEvents, type Channel, type EventName
 } from '@shared/ipc'
 
 // The renderer gets exactly the channels declared in the contract, and nothing else.
 const api = Object.fromEntries(
-  CHANNELS.map((c) => [c, (...args: unknown[]) => ipcRenderer.invoke(c, ...args)])
+  CHANNELS.map((c) => [c, (...args: unknown[]) => ipcRenderer.invoke(c, ...args.map(toCloneable))])
 ) as { [C in Channel]: (...args: Parameters<AnthemApi[C]>) => Promise<ReturnType<AnthemApi[C]>> }
 
 contextBridge.exposeInMainWorld('anthem', api)
