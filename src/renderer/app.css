@@ -1,0 +1,33 @@
+/* Base layer only. Every component styles itself from tokens; raw hex here would be a lint failure. */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  font-family: var(--font-ui);
+  font-size: var(--font-size-md);
+  color: var(--text-body);
+  background: var(--surface-root);
+  -webkit-font-smoothing: antialiased;
+}
+
+#app { height: 100%; }
+
+:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 1px;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-control) transparent;
+}

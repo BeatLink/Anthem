@@ -1,0 +1,1278 @@
+# Anthem — Design Specification
+
+**Status:** draft v0.1 · greenfield · nothing built yet
+**One line:** a desktop music player with gmusicbrowser's data model and power, a web-technology UI
+that users can re-layout and re-skin, and Halon as its reference theme.
+
+---
+
+## 1. What Anthem is
+
+gmusicbrowser is the most capable Linux music library manager ever written — arbitrary user-defined
+fields, a real filter algebra, smart playlists, mass tagging, and a layout system where the entire
+window is user-assembled from widgets. It is also Perl/GTK2, effectively unmaintained, and its
+customization story ends at a bespoke `.layout` file format that almost nobody learns.
+
+Anthem keeps the model and replaces the substrate:
+
+| gmusicbrowser | Anthem |
+|---|---|
+| Perl + GTK2 | Rust core + web UI in a native shell |
+| In-memory Perl column store | SQLite (source of truth) + in-memory columnar index |
+| `.layout` DSL, GTK widgets | JSON layout documents, web component registry |
+| GTK theme + per-widget hacks | CSS custom properties from a design-token file |
+| Field defs hardcoded in `gmusicbrowser_songs.pm` | Field defs as data, user fields first-class |
+| Filter strings (`rating:>:60`) | Filter AST (JSON), compiles to SQL *and* to a native predicate |
+
+### 1.1 Non-goals for v1
+
+- Not a streaming client. Local files (and network mounts) only. Streaming is a plugin surface later.
+- Not a mobile app. Desktop first; the UI being web tech makes a remote-control web view cheap later,
+  but it is not v1 scope.
+- Not a DJ tool, not a tag *database* (MusicBrainz Picard's job) — Anthem writes tags well but does
+  not try to out-Picard Picard on acoustic fingerprinting.
+
+### 1.2 Success criteria
+
+1. 250,000-track library: cold start to interactive under 3 seconds; any filter/sort/group under 100 ms.
+2. Every gmusicbrowser filter operator has an Anthem equivalent, and an importer converts existing
+   gmusicbrowser filters and layouts.
+3. A user can move a panel, add a column, and restyle the whole app without recompiling anything.
+4. Tag edits round-trip losslessly across MP3/FLAC/Ogg/Opus/M4A/WavPack/APE.
+
+---
+
+## 2. Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  Renderer (WebView)  —  TypeScript · Svelte 5 · Vite                │
+│                                                                     │
+│  ┌───────────────┐  ┌──────────────┐  ┌────────────────────────┐    │
+│  │ Layout engine │  │ Widget       │  │ Theme runtime          │    │
+│  │ (JSON → tree) │  │ registry     │  │ (tokens → CSS vars)    │    │
+│  └───────────────┘  └──────────────┘  └────────────────────────┘    │
+│  ┌─────────────────────────────────────────────────────────────┐    │
+│  │ View-model stores: selection, filter stack, now-playing,    │    │
+│  │ virtualized row windows                                     │    │
+│  └─────────────────────────────────────────────────────────────┘    │
+└──────────────────────────────┬──────────────────────────────────────┘
+                    typed IPC (commands + event stream)
+┌──────────────────────────────┴──────────────────────────────────────┐
+│  Core (Rust)                                                        │
+│                                                                     │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐   │
+│  │ Library  │ │ Query    │ │ Tag I/O  │ │ Playback │ │ Services │   │
+│  │ index    │ │ engine   │ │ (lofty)  │ │ engine   │ │ MPRIS,   │   │
+│  │          │ │ AST→SQL  │ │          │ │ (mpv)    │ │ scrobble │   │
+│  │          │ │ AST→pred │ │          │ │          │ │ hotkeys  │   │
+│  └────┬─────┘ └────┬─────┘ └────┬─────┘ └────┬─────┘ └──────────┘   │
+│       └────────────┴────────────┴────────────┘                      │
+│                    SQLite (WAL) + FTS5                              │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### 2.1 Shell: Tauri 2
+
+Chosen over Electron. Reasons that actually matter here: the process that must be fast is the
+library index, and that is Rust either way; Tauri's ~10 MB binary and ~80 MB resident beats
+Electron's ~150 MB baseline for an app people leave running for weeks; and the tag/decode/filesystem
+work wants native libraries, not N-API bindings.
+
+The cost is honest: WebView2/WebKitGTK/WKWebView are three engines, not one, and CSS that works in
+Chromium can break in WebKitGTK. Mitigation: a documented CSS baseline (§6.4) and CI screenshot
+tests on all three.
+
+**Rejected:** Electron (memory, and no benefit once the core is Rust), pure-web/PWA (no tag writing,
+no gapless, no filesystem watch), native GTK/Qt (defeats the whole customization premise).
+
+### 2.2 Renderer: TypeScript + Svelte 5 + Vite
+
+Svelte 5 runes over React because the two hot paths — a 250k-row virtualized list and a 20 Hz
+playback-position tick — are exactly where React's re-render accounting costs the most, and because
+the layout engine is data-driven enough that the component ecosystem advantage of React barely
+applies. Everything below the widget registry is hand-rolled regardless.
+
+If this turns out wrong it is recoverable: the widget registry is the only React-shaped seam, and
+widgets are small.
+
+### 2.3 Process model
+
+Single Tauri process; the Rust core runs the library and query work on a dedicated thread pool
+(`tokio` + `rayon` for scans). Playback lives in its own thread with its own event loop so a slow
+library scan can never stutter audio. The scanner is a separate task with a bounded channel back to
+the index — a full rescan must never block the UI or the query engine's read path.
+
+---
+
+## 3. Data model
+
+### 3.1 The core insight, borrowed from gmusicbrowser
+
+In gmusicbrowser a *field* is not a column — it is a typed descriptor carrying its own storage
+strategy, display format, filter operators, sort key, edit widget, and tag-format mappings. That's
+why adding a user field there gives you filtering, sorting, grouping, column display, and tag
+round-tripping for free. Anthem keeps this and makes it data instead of Perl.
+
+```jsonc
+// fields/rating.json — a built-in field descriptor
+{
+  "id": "rating",
+  "name": "Rating",
+  "type": "rating",            // resolves to a type descriptor (§3.3)
+  "storage": "column",         // column | multi | virtual | computed
+  "flags": ["filterable", "groupable", "sortable", "editable", "columnar", "searchable"],
+  "tags": {
+    "id3v2":  "POPM;;%r|TXXX;FMPS_Rating;%f",
+    "vorbis": "FMPS_RATING|RATING",
+    "ilst":   "----:com.apple.iTunes:FMPS_Rating",
+    "ape":    "FMPS_RATING"
+  },
+  "default": null,             // null = unrated, distinct from 0
+  "range": [0, 100]
+}
+```
+
+### 3.2 Field catalogue (v1)
+
+**File / physical**
+`path`, `filename`, `folder`, `filesize`, `mtime`, `added`, `format`, `codec`, `bitrate`,
+`bitrate_mode`, `samplerate`, `channels`, `bits_per_sample`, `length`, `hash_sha256` (dedup),
+`missing` (bool).
+
+**Core tags**
+`title`, `artist` (multi), `album_artist` (multi), `album`, `album_artist_or_artist` (virtual),
+`composer` (multi), `lyricist` (multi), `conductor` (multi), `remixer` (multi), `performer` (multi),
+`year`, `original_year`, `date` (full ISO), `track_number`, `track_total`, `disc_number`,
+`disc_total`, `disc_subtitle`, `version`, `compilation` (bool), `bpm`, `key`, `isrc`, `barcode`,
+`catalog_number`, `label` (publisher), `media`, `language`, `comment`, `lyrics`.
+
+**Set / multi-value ("flags" fields — gmusicbrowser's most underrated idea)**
+`genre`, `grouping`, `mood`, `style`, `tags` (free-form user labels), `occasion`.
+These are many-to-many, autocompleted, colour-assignable, and filterable with set semantics
+(`has any`, `has all`, `has none`, `count`).
+
+**MusicBrainz identity**
+`mb_track_id`, `mb_recording_id`, `mb_release_id`, `mb_release_group_id`, `mb_artist_ids` (multi),
+`mb_album_artist_ids` (multi), `acoustid`.
+
+**Loudness**
+`rg_track_gain`, `rg_track_peak`, `rg_album_gain`, `rg_album_peak`, `r128_track_gain`,
+`r128_album_gain`, `loudness_lufs`, `dynamic_range`.
+
+**Statistics (Anthem-owned, never guessed from tags)**
+`rating` (0–100 stored, 5 stars displayed), `play_count`, `skip_count`, `last_played`, `last_skipped`,
+`first_played`, `play_history` (timestamp list), `skip_history`, `bookmark_ms`, `love` (bool).
+
+**Derived / computed**
+`album_gid`, `artist_gid`, `has_cover`, `has_lyrics`, `is_duplicate`, `sort_title`, `sort_artist`,
+`sort_album`, plus any user-defined expression field.
+
+**User-defined fields**
+Any number, of any type in §3.3, with an optional tag mapping. A user field with a tag mapping
+round-trips to files; without one it lives only in Anthem's database.
+
+### 3.3 Type descriptors
+
+Each type supplies: storage encoding, display formatter, sort key, valid filter operators, group-by
+function, edit widget, and tag serialization.
+
+| type | notes | filter ops |
+|---|---|---|
+| `string` | case-preserving, case-insensitive compare | `is`, `contains`, `starts`, `ends`, `regex`, `empty` |
+| `text` | long-form (lyrics, comment); FTS5-indexed | as `string` + `matches` (FTS) |
+| `set` | multi-value, interned, colourable | `any`, `all`, `none`, `count`, `empty` |
+| `artist` | `set` + sort-name + MBID identity + split rules | as `set` |
+| `integer` | width-typed | `=`, `≠`, `>`, `<`, `≥`, `≤`, `between`, `top N`, `bottom N`, `empty` |
+| `float` | NaN = "no value" (gmusicbrowser's trick, kept) | as `integer` + `defined` |
+| `rating` | 0–100 · null ≠ 0 | as `integer` + `unrated` |
+| `date` | ISO instant, UTC stored, local displayed | `before`, `after`, `between`, `in last N <unit>`, `empty` |
+| `datelist` | play/skip history | `count in last N <unit>`, `ever`, `never` |
+| `duration` | ms | as `integer`, formatted `m:ss` |
+| `bool` | tri-state (true/false/unset) | `is` |
+| `path` | prefix-tree grouped | `under`, `is`, `contains`, `regex` |
+| `enum` | closed value set | `is`, `in`, `empty` |
+
+### 3.4 SQLite schema (abridged)
+
+```sql
+CREATE TABLE tracks (
+  id            INTEGER PRIMARY KEY,
+  path          TEXT NOT NULL UNIQUE,
+  folder_id     INTEGER NOT NULL REFERENCES folders(id),
+  filesize      INTEGER, mtime INTEGER, added INTEGER NOT NULL,
+  title         TEXT, album_id INTEGER REFERENCES albums(id),
+  year          INTEGER, track_number INTEGER, disc_number INTEGER,
+  length_ms     INTEGER, codec TEXT, bitrate INTEGER, samplerate INTEGER, channels INTEGER,
+  rating        INTEGER,          -- NULL = unrated
+  play_count    INTEGER NOT NULL DEFAULT 0,
+  skip_count    INTEGER NOT NULL DEFAULT 0,
+  last_played   INTEGER, last_skipped INTEGER,
+  rg_track_gain REAL, rg_album_gain REAL,
+  missing       INTEGER NOT NULL DEFAULT 0,
+  content_hash  BLOB
+) STRICT;
+
+-- multi-value fields, one table, field_id-discriminated
+CREATE TABLE track_values (
+  track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+  field_id INTEGER NOT NULL,
+  value_id INTEGER NOT NULL REFERENCES values_(id),
+  ordinal  INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (track_id, field_id, ordinal)
+) WITHOUT ROWID;
+CREATE INDEX track_values_lookup ON track_values(field_id, value_id, track_id);
+
+CREATE TABLE values_ (              -- interned strings for every set-typed field
+  id INTEGER PRIMARY KEY, field_id INTEGER NOT NULL,
+  value TEXT NOT NULL, sort_key TEXT, colour TEXT,
+  UNIQUE(field_id, value)
+);
+
+-- user-defined fields land here, no migration required
+CREATE TABLE track_extras (
+  track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+  field_id INTEGER NOT NULL, value BLOB,
+  PRIMARY KEY (track_id, field_id)
+) WITHOUT ROWID;
+
+CREATE VIRTUAL TABLE tracks_fts USING fts5(
+  title, artist, album, album_artist, genre, comment, lyrics,
+  content='', tokenize="unicode61 remove_diacritics 2"
+);
+
+CREATE TABLE play_history (
+  track_id INTEGER NOT NULL, at INTEGER NOT NULL,
+  kind INTEGER NOT NULL,          -- 0 play, 1 skip
+  position_ms INTEGER
+);
+```
+
+Design notes:
+- `values_` interning is what makes "group all 250k tracks by genre" a join over small integers.
+- `track_extras` means a user field never triggers `ALTER TABLE` on a huge table.
+- FTS5 with `content=''` (contentless) keeps the index small; we rebuild rows on tag write.
+- `STRICT` tables, `PRAGMA journal_mode=WAL`, `synchronous=NORMAL`, `foreign_keys=ON`.
+
+### 3.5 In-memory index
+
+SQLite is durable truth; it is not fast enough for interactive group-by over 250k rows at 60 fps.
+The core keeps a columnar mirror, loaded at startup (target: <1.5 s for 250k tracks):
+
+- Scalar fields → typed `Vec<T>` parallel arrays, indexed by a dense `TrackIdx` (not row id).
+- Set fields → roaring bitmaps per value id. `genre = Rock` is a bitmap lookup; `Rock AND NOT Live`
+  is two bitmap ops.
+- Strings → interned `Arc<str>` in a global symbol table with precomputed collation keys.
+- Filters produce a `RoaringBitmap`; sorts produce a `Vec<TrackIdx>`; the UI receives only the
+  windows it renders.
+
+Memory budget: ~120 bytes/track of scalars + interned strings ≈ **under 250 MB at 1 million tracks**.
+Above that, the index degrades gracefully to SQL-only mode (documented, not silent).
+
+### 3.6 Ratings
+
+Stored 0–100 (integer), `NULL` = unrated. Displayed as 5 stars, half-stars optional per user setting
+(half-star mode maps to the 0/10/20/…/100 grid; full-star mode to 0/20/40/60/80/100).
+
+Interop mapping, written to files only when "sync stats to tags" is on:
+
+| Anthem | POPM (ID3v2) | FMPS_Rating | Stars |
+|---|---|---|---|
+| null | tag absent | tag absent | — |
+| 0 | 0 | 0.0 | 0 |
+| 20 | 1 | 0.2 | 1 |
+| 40 | 64 | 0.4 | 2 |
+| 60 | 128 | 0.6 | 3 |
+| 80 | 196 | 0.8 | 4 |
+| 100 | 255 | 1.0 | 5 |
+
+POPM reads are bucketed on the inverse of this table (the Windows Media / Banshee convention), and
+`FMPS_Rating` wins over `POPM` when both exist because it is unambiguous.
+
+---
+
+## 4. Query engine
+
+### 4.1 Filter AST
+
+One JSON representation serves saved filters, smart playlists, the search bar, and the browser
+panes. It has exactly two node kinds.
+
+```jsonc
+{ "op": "and", "children": [
+    { "field": "rating",     "op": ">=",       "value": 80 },
+    { "field": "genre",      "op": "any",      "value": ["Jazz", "Blues"] },
+    { "field": "last_played","op": "not_in_last", "value": { "n": 30, "unit": "day" } },
+    { "op": "or", "children": [
+        { "field": "year",   "op": "between",  "value": [1955, 1969] },
+        { "field": "tags",   "op": "any",      "value": ["essential"] }
+    ]},
+    { "op": "not", "children": [ { "field": "path", "op": "under", "value": "/music/live" } ] }
+]}
+```
+
+Operator set is a superset of gmusicbrowser's, so its filter strings import 1:1:
+
+| gmb | Anthem | | gmb | Anthem |
+|---|---|---|---|---|
+| `e` | `is` / `=` | | `h` | `top` (top N by field) |
+| `-e` | `not_is` / `≠` | | `t` | `bottom` |
+| `>` `<` | `>` `<` | | `~` | `regex` |
+| `-<` `->` | `>=` `<=` | | `s` | `starts` |
+| `b` | `between` | | `c` | `contains` |
+| `-b` | `not_between` | | `defined` | `defined` |
+
+Plus Anthem additions: `any` / `all` / `none` / `count` for set fields, `in_last` / `not_in_last` for
+dates, `matches` for FTS, and `in_playlist` / `in_filter` for composition (a smart playlist may
+reference another by id — cycles are detected at save time and rejected).
+
+### 4.2 Two compilation targets
+
+The same AST compiles to:
+
+1. **A native predicate** over the in-memory index — bitmap intersection for set ops, SIMD-friendly
+   scans for numerics. This is what the UI hits on every keystroke.
+2. **Parameterized SQL** — used for durable smart-playlist definitions, headless/CLI queries, and as
+   the fallback when the in-memory index is disabled.
+
+Both are property-tested against each other: for a generated corpus and a generated AST, the two
+paths must return identical id sets. This test is non-negotiable — it is the only thing that keeps
+the fast path honest.
+
+### 4.3 Smart playlists
+
+A smart playlist = filter AST + sort spec + optional limit + refresh policy.
+
+```jsonc
+{
+  "id": "sp_neglected_gems",
+  "name": "Neglected Gems",
+  "filter":  { "op": "and", "children": [
+      { "field": "rating", "op": ">=", "value": 80 },
+      { "field": "last_played", "op": "not_in_last", "value": { "n": 6, "unit": "month" } }
+  ]},
+  "sort":  [ { "field": "rating", "dir": "desc" }, { "field": "random", "seed": "session" } ],
+  "limit": { "count": 100, "by": "tracks" },   // or by: "duration" / "filesize"
+  "refresh": "live",                            // live | on_open | manual
+  "dedupe": { "by": "mb_recording_id", "keep": "highest_bitrate" }
+}
+```
+
+`sort` supports a `random` pseudo-field with a seed policy (`session`, `daily`, `fixed:<n>`), and a
+`weighted_random` pseudo-field taking a weight expression — this is how gmusicbrowser's excellent
+"play what I like but haven't heard lately" shuffle gets reproduced:
+
+```jsonc
+{ "field": "weighted_random",
+  "weight": "(rating ?? 50) * pow(0.5, days_since(last_played) < 30 ? 2 : 0)" }
+```
+
+### 4.4 The search bar
+
+A single input parses a "smart string" into an AST — gmusicbrowser's `smartfilter` idea, generalized:
+
+```
+beatles                      → FTS across searchable fields
+artist:beatles               → artist contains "beatles"
+artist="the beatles"         → exact
+rating:>3                    → rating >= 60  (star-aware: numbers ≤5 on a rating field mean stars)
+year:1965..1970              → between
+genre:jazz,blues             → genre has any of
+-live                        → NOT (FTS "live")
+played:<30d                  → last_played in last 30 days
+added:>2024-01-01            → added after
+bpm:120..130 rating:>=4      → implicit AND
+```
+
+Parse errors never block: the bar shows what it understood as removable chips, and unparseable text
+degrades to a plain FTS term.
+
+---
+
+## 5. Layout and customization
+
+### 5.1 The premise
+
+gmusicbrowser's real superpower is that the window is a document, not a program. Anthem keeps that
+and puts it in a format people already know how to edit.
+
+A layout is a JSON document describing a tree of nodes. Nodes are either **containers** (split, tabs,
+stack, grid, toolbar, overlay) or **widgets** from the registry. Every node has an `id`, a `type`,
+`props`, and optional `style`.
+
+```jsonc
+{
+  "id": "halon-default",
+  "name": "Halon",
+  "extends": null,
+  "window": { "min": [900, 560], "default": [1400, 900] },
+  "root": {
+    "type": "split", "dir": "vertical", "sizes": [1, "auto"],
+    "children": [
+      { "type": "split", "dir": "horizontal", "sizes": ["260px", 1],
+        "children": [
+          { "type": "sidebar", "id": "nav",
+            "props": { "sections": ["library", "playlists", "smart", "filters", "queue"] } },
+          { "type": "split", "dir": "vertical", "sizes": ["auto", 1],
+            "children": [
+              { "type": "filterpanes", "id": "browser",
+                "props": { "panes": [
+                    { "field": "genre",       "width": 200 },
+                    { "field": "album_artist","width": 260 },
+                    { "field": "album",       "width": 260, "art": true }
+                ]}},
+              { "type": "songlist", "id": "main",
+                "props": {
+                  "columns": ["track_number", "title", "artist", "album", "year",
+                              "length", "rating", "play_count"],
+                  "group_by": null, "sort": [{ "field": "album" }, { "field": "disc_number" },
+                                             { "field": "track_number" }]
+                }}
+            ]}
+        ]},
+      { "type": "toolbar", "id": "player", "props": { "items": [
+          "prev", "playpause", "next", "stop",
+          { "type": "cover", "size": 56 },
+          { "type": "nowplaying", "format": "{title}\n{artist} — {album}" },
+          { "type": "seekbar", "props": { "waveform": false } },
+          { "type": "stars" }, "spacer", "volume", "queuebutton", "menu"
+      ]}}
+    ]
+  }
+}
+```
+
+### 5.2 Widget registry
+
+Every widget declares a manifest: id, display name, accepted props (JSON Schema), the data channels
+it subscribes to, and its default size constraints. The layout editor is generated from these
+manifests — no widget is special-cased in the editor.
+
+**v1 widgets:** `songlist`, `songtree` (grouped/nested list with album headers), `filterpanes`,
+`albumgrid`, `artistgrid`, `queue`, `playlistlist`, `sidebar`, `toolbar`, `seekbar`, `volume`,
+`cover`, `artistimage`, `nowplaying`, `stars`, `lyrics`, `taginfo`, `statusbar`, `searchbar`,
+`filterchips`, `visualizer`, `contextpanel` (tabbed: lyrics / artist bio / related / album tracks),
+`buttonbox`, `spacer`, `label` (with the format-string language, §5.5).
+
+### 5.3 Layout editing
+
+Three levels, all reaching the same document:
+
+1. **Direct manipulation** — drag panel edges, drag widgets between containers, right-click a column
+   header to add/remove/reorder columns. Changes write straight to the layout JSON.
+2. **Layout inspector** — a tree view of the document with a property grid generated from the widget
+   manifest. Shows the JSON alongside, editable, with live validation.
+3. **The file** — layouts live at `~/.config/anthem/layouts/*.json` and hot-reload on save. This is
+   the escape hatch that makes power users happy and makes layouts shareable as a gist.
+
+Layouts support `extends`: a layout may inherit another and patch nodes by id (RFC 6902-style
+patches). Shipping a "Halon + big album art" variant is then a 10-line file.
+
+### 5.4 Theming
+
+Themes are **token documents**, not stylesheets. Halon's `tokens.json` is the reference input and its
+schema is Anthem's schema — same names, same light/dark split:
+
+```
+accent · border-{control,default,focus,hover} · focus-ring
+shadow-{base,card,floating,item,modal,tab}
+status-{danger,success,warning,warning-text}
+surface-{default,navigation,navigation-hover,overlay,root,secondary}
+text-{body,heading,on-fill,on-light,on-navigation,secondary,tertiary}
+```
+
+Anthem adds a small player-specific layer on top, derived by default but overridable:
+
+```
+media-progress · media-progress-track · media-buffer
+rating-on · rating-off · rating-hover
+waveform-played · waveform-unplayed
+row-{even,odd,hover,selected,selected-inactive,playing}
+column-header · column-separator · drag-indicator
+```
+
+At runtime the token document becomes CSS custom properties on `:root`, with `data-theme` switching
+light/dark and `prefers-color-scheme` as the default signal. Every widget styles itself from tokens
+only — a lint rule (borrowed in spirit from Halon's `scripts/lint-gtk.mjs`) fails CI on any raw hex
+in a component stylesheet.
+
+Themes ship as a directory: `theme.json` (tokens) + optional `theme.css` (overrides) + optional
+assets. Halon-Light and Halon-Dark ship in-tree, generated from Halon's own `tokens.json` so they
+stay in sync with the upstream repo at `Coding/TechNet/Halon`.
+
+Metric tokens (spacing scale, radii, control heights, density modes) follow Halon's
+`THEME-DESIGN-GUIDE.md` §4 rather than being reinvented — including its three density levels, which
+map cleanly onto compact/normal/comfortable row heights in the song list.
+
+### 5.5 Format strings
+
+One tiny language used by `label`, `nowplaying`, tooltips, tray text, notification text, the file
+renamer, and column custom formats:
+
+```
+{title}                       field
+{artist|album_artist}         first non-empty
+{year:%04d}                   format spec
+{length:m:ss}                 duration format
+{rating:stars}                 typed renderer
+[{disc}.]{track}. {title}     bracketed groups vanish if any field inside is empty
+{genre:join(", ")}            set field join
+{path:basename}               transforms: basename, dirname, ext, upper, lower, title, pad(n)
+```
+
+The renamer/organizer reuses it exactly: `{album_artist}/{year} - {album}/[{disc}.]{track:%02d} - {title}`.
+
+---
+
+## 6. Interaction and views
+
+### 6.1 Song list
+
+Virtualized, 250k rows, 60 fps scroll. Non-negotiable behaviours:
+
+- Column add/remove/reorder/resize from the header context menu; every filterable field is available
+  as a column.
+- Multi-key sort (shift-click to add a sort key), sort indicator shows priority.
+- Grouping mode (SongTree): group by any field, sticky group headers with album art, per-group
+  aggregate row (count, total duration).
+- Selection: range, toggle, invert, "select all in group", keyboard-first.
+- Inline rating (click the star position), inline field edit on slow double-click for editable
+  string fields.
+- Drag to queue, to playlist, to another app (URI list), from the filesystem in.
+- Row context menu is user-configurable (an action list in the layout document).
+
+### 6.2 Filter panes
+
+The gmusicbrowser browser panes, kept: N stacked or side-by-side lists, each grouping the current
+result set by a field, each selection narrowing the next. Additions: pane field is switchable inline,
+panes show counts and aggregate duration, multi-select within a pane is OR, across panes is AND, and
+the whole pane state is expressible as — and round-trips to — a filter AST, so any browse state can
+be saved as a smart playlist with one click.
+
+### 6.3 Filter stack
+
+The active query is a visible stack of chips: `Library → genre: Jazz → rating ≥ 4 → "coltrane"`.
+Each chip is removable and reorderable; the stack is the AST. This replaces the "where did this view
+come from?" confusion that browse-by-panes normally causes.
+
+### 6.4 CSS baseline
+
+Because three WebView engines: no `:has()` in load-bearing positions (WebKitGTK lag), no container
+queries in v1, `content-visibility` behind a capability check, subgrid avoided. Virtualization is
+transform-based (`translate3d` on a spacer), not `position: absolute` per row. Scrollbar styling via
+`scrollbar-width`/`scrollbar-color` with a `::-webkit-scrollbar` fallback.
+
+---
+
+## 7. Tag management
+
+### 7.1 Reading and writing
+
+`lofty-rs` is the tag layer: ID3v1/v2.2–2.4, Vorbis comments (FLAC/Ogg/Opus), MP4 `ilst`, APE,
+WavPack, WAV/AIFF chunks, plus MP3/AAC/FLAC/Opus/Vorbis/ALAC/WavPack/APE/AIFF/WAV properties.
+Module formats (`.mod`, `.xm`, `.it`, `.s3m`) get metadata via a small dedicated reader.
+
+Writing rules:
+
+- **Never** rewrite a file that has no pending changes. Tag writes are explicit, batched, and
+  transactional per-file (write to temp, fsync, rename).
+- Preserve unknown frames byte-for-byte. Anthem is not allowed to lose a tag it does not understand.
+- ID3v2.4 + UTF-8 is the default target for MP3; existing v2.3 files stay v2.3 unless the user opts
+  into upgrading.
+- A dry-run diff view before any mass write, showing per-file before/after per-field.
+- Every write is journaled (`tag_writes` table) with the prior value, so a mass edit is undoable for
+  N days.
+
+### 7.2 Mass tagging
+
+- Select N tracks → edit any field; mixed values show as `<multiple>` and stay untouched unless set.
+- Find/replace across a field, with regex and capture groups, previewed.
+- **Tags from filename**: pattern `{album_artist}/{album}/{track} - {title}` matched against paths,
+  with a preview table and per-row opt-out.
+- **Filename from tags**: the same format language (§5.5), with collision detection, a
+  copy-vs-move-vs-hardlink choice, and empty-directory cleanup.
+- Auto-numbering, case transforms (title case with a configurable exception list — "of", "the",
+  "feat."), whitespace normalization, `artist` splitting on configurable separators
+  (`;`, `/`, `feat.`, `&`) with an allow-list for names that legitimately contain them.
+- Album-level operations: set album artist from most common artist, mark as compilation, fix disc
+  numbering, embed cover art in all tracks.
+
+### 7.3 Artwork
+
+- Sources in priority order: embedded picture → folder image (`cover.*`, `folder.*`, `front.*`,
+  configurable) → cached remote fetch (plugin) → generated placeholder from the album's colour hash.
+- Cache: content-addressed thumbnails at 64/128/256/512 px in `~/.cache/anthem/art/`, WebP.
+- Multiple image types supported per ID3v2 spec (front, back, artist, media, booklet).
+
+### 7.4 Stats sync
+
+Play counts, ratings, and labels can optionally write back to files as `FMPS_*` / `POPM` so the
+library survives a database loss and interoperates with other players. Off by default (it means
+touching every file you rate); when on, writes are deferred and coalesced.
+
+---
+
+## 8. Playback
+
+### 8.1 Engine
+
+A `PlaybackEngine` trait with a default **libmpv** implementation. mpv is chosen for the same reason
+gmusicbrowser eventually added an mpv backend: it already solves gapless, format coverage
+(everything, including exotic and module formats), ReplayGain application, precise seeking, and
+output backend selection (PipeWire/PulseAudio/ALSA/CoreAudio/WASAPI) — problems that are unglamorous
+and enormous to re-solve.
+
+A second implementation — `symphonia` decode + `cpal` output — is planned for a dependency-free build
+and for platforms where bundling mpv is awkward. The trait keeps this a swap, not a rewrite. Format
+coverage differences are surfaced in the UI, not hidden.
+
+### 8.2 Features
+
+- Gapless playback with pre-buffered next track; crossfade with configurable curve and per-transition
+  override (no crossfade within an album's gapless boundary).
+- ReplayGain and EBU R128: read from tags, apply track or album gain per user preference, with a
+  preamp and a clipping-prevention limiter. Built-in scanner (`bs1770` / `ebur128`) for untagged
+  files, run as a background batch job.
+- Queue that is genuinely separate from the playlist (gmusicbrowser's model): the queue is a
+  transient list that drains; the playlist is the standing context. "Play next", "queue album",
+  "queue and clear".
+- Repeat: off / all / one / album. Shuffle: off / tracks / albums / weighted (§4.3).
+- **Auto-fill**: when the queue empties, append N tracks from a chosen filter — this is what makes
+  gmusicbrowser feel like a radio you programmed.
+- Locks: lock to current artist / album / genre / filter, so shuffle stays inside a set.
+- Bookmarks and resume-on-launch for long tracks (audiobooks, mixes, DJ sets).
+- Per-track and global equalizer (10-band), off by default.
+- Playback speed and pitch for spoken-word content.
+
+### 8.3 Events
+
+The core emits a typed event stream to the renderer: `state`, `position` (throttled to 10 Hz,
+interpolated in the UI to avoid a 60 Hz IPC firehose), `track_changed`, `queue_changed`,
+`library_changed(delta)`, `scan_progress`, `error`. The renderer never polls.
+
+---
+
+## 9. Library management
+
+### 9.1 Scanning
+
+- Multiple watched roots, each with include/exclude globs.
+- Initial scan: parallel walk (`ignore` crate), per-file tag read on a rayon pool, batched inserts in
+  one transaction per 5,000 files. Target: 100k files in under 4 minutes on an NVMe SSD.
+- Incremental: `notify`-based filesystem watching with debounce; on startup, an mtime/size sweep
+  catches changes made while closed.
+- Moved-file detection via `content_hash` — a moved file keeps its rating and play count. This is the
+  single most valuable thing a library manager can get right.
+- Missing files are flagged, not deleted; a "missing tracks" view offers relocate/forget.
+- Network mounts: a per-root "slow" flag that disables hashing and watching, using mtime only.
+
+### 9.2 Deduplication
+
+Find duplicates by any of: `mb_recording_id`, content hash, or fuzzy (normalized artist+title+length
+within a tolerance). Present as groups with a rule-based keeper selection (highest bitrate, preferred
+format, oldest added, in-preferred-folder) and a reviewed batch action.
+
+### 9.3 Import / export
+
+- **gmusicbrowser importer**: reads `gmbrc` — library entries, ratings, play counts, labels, saved
+  filters, and `.layout` files (best-effort translation to Anthem layout JSON, with a report of what
+  could not be mapped). This matters: it is the migration path for the actual target user.
+- Playlist formats: M3U/M3U8, PLS, XSPF, CUE (read).
+- Full export: library + stats + playlists as JSON, and a plain SQLite copy.
+- iTunes XML and Rhythmbox XML import for ratings/play counts.
+
+---
+
+## 10. Integrations
+
+- **MPRIS2** on Linux (full `TrackList` and `Playlists` interfaces, not just the minimum).
+- **SMTC** on Windows, **MPNowPlayingInfoCenter** on macOS.
+- Global media-key hotkeys, plus fully rebindable in-app keybindings (a JSON keymap file, same
+  hot-reload treatment as layouts).
+- Tray icon with a configurable menu and scroll-to-change-volume.
+- Desktop notifications on track change, with album art.
+- **Last.fm / ListenBrainz** scrobbling with an offline queue that survives restarts.
+- A local HTTP control API (opt-in, loopback-only by default, token-authenticated) — this is what a
+  future phone remote and CLI both talk to.
+- A `anthemctl` CLI over the same API: `anthemctl play`, `anthemctl query 'rating:>=4 genre:jazz'`.
+
+---
+
+## 11. Plugins
+
+Deferred past v1, but the seams are designed now so it is not a rewrite:
+
+- **UI plugins**: a widget bundle (manifest + ES module) dropped in `~/.config/anthem/widgets/`,
+  registering into the same registry as built-ins. Sandboxed to the renderer, no filesystem access
+  except through declared IPC permissions.
+- **Core plugins**: WASM components (`wasmtime`) implementing declared host interfaces — metadata
+  provider, artwork provider, scrobbler, audio filter. WASM over native dylibs for the obvious
+  safety and portability reasons.
+- Everything Anthem ships that *could* be a plugin (lyrics fetch, artist bio, artwork fetch) is built
+  as one, to keep the interfaces honest.
+
+---
+
+## 12. Performance budget
+
+| Operation | Library size | Budget |
+|---|---|---|
+| Cold start → interactive | 250k | 3 s |
+| In-memory index load | 250k | 1.5 s |
+| Filter (any AST) | 250k | 100 ms |
+| Sort by any column | 250k | 150 ms |
+| Group-by for a filter pane | 250k | 80 ms |
+| Search keystroke → results | 250k | 50 ms |
+| Scroll frame | any | 16 ms |
+| Track change (gapless) | any | 0 audible gap |
+| Idle CPU (playing) | any | < 1% |
+| Idle RSS (playing) | 250k | < 400 MB |
+
+Enforced by a benchmark suite over three generated corpora (10k / 100k / 1M) that runs in CI and
+fails on regression beyond 15%.
+
+---
+
+## 13. Testing
+
+- **Property tests** (`proptest`): AST → SQL and AST → predicate must agree, for generated ASTs over
+  a generated library. Format-string parsing round-trips. Filter serialization round-trips.
+- **Golden-file tests** for tag I/O: a corpus of real-world-ugly files (broken ID3 sizes, mixed
+  encodings, huge APIC frames, v1+v2 disagreement, Unicode edge cases) with expected read output and
+  byte-compared write output.
+- **Snapshot tests** for layout rendering across the three WebView engines, via Playwright against a
+  browser-hosted renderer plus a real-shell smoke test per platform.
+- **Fuzzing** on the tag reader and the smart-string parser — both eat untrusted input.
+- Playback is verified by a null-sink engine implementation that asserts the state machine, plus a
+  manual gapless checklist against a known-gapless album per release.
+
+---
+
+## 14. Repository layout
+
+```
+anthem/
+├── crates/
+│   ├── anthem-core/        # library index, query engine, field system
+│   ├── anthem-db/          # SQLite schema, migrations, DAO
+│   ├── anthem-tags/        # lofty wrapper, write journal, mass ops
+│   ├── anthem-play/        # PlaybackEngine trait + mpv backend
+│   ├── anthem-scan/        # walker, watcher, hashing, dedupe
+│   ├── anthem-svc/         # MPRIS, scrobble, hotkeys, HTTP API
+│   └── anthem-cli/         # anthemctl
+├── src-tauri/              # shell, IPC surface, packaging
+├── ui/
+│   ├── src/
+│   │   ├── layout/         # layout engine, inspector, patching
+│   │   ├── widgets/        # widget registry + built-ins
+│   │   ├── theme/          # token runtime, theme loader
+│   │   ├── stores/         # view models
+│   │   └── lib/            # virtualization, format strings, ipc client
+│   └── themes/
+│       ├── halon-light/
+│       └── halon-dark/
+├── layouts/                # shipped layout documents
+├── fields/                 # built-in field descriptors
+├── docs/
+└── bench/
+```
+
+---
+
+## 15. Roadmap
+
+**M0 — Skeleton (1 wk).** Tauri shell, Vite/Svelte renderer, typed IPC codegen, CI on three
+platforms, Halon tokens → CSS variables, a window that opens and is already correctly themed.
+
+**M1 — Library core (3 wk).** Schema + migrations, field descriptor system, scanner, tag reading,
+in-memory index, `songlist` widget with virtualization and column config. Milestone test: scan and
+scroll 100k tracks.
+
+**M2 — Query engine (2 wk).** Filter AST, both compilation targets, the agreement property test,
+search bar parser, filter panes, filter stack chips.
+
+**M3 — Playback (2 wk).** mpv backend, queue vs playlist, gapless, ReplayGain apply, seekbar and
+transport widgets, MPRIS. Milestone: usable as a daily player.
+
+**M4 — Ratings and stats (1 wk).** Rating widget, play/skip history recording, stats fields
+filterable and sortable, optional tag write-back.
+
+**M5 — Smart playlists (2 wk).** Saved filters, smart playlist editor UI over the AST, limits,
+weighted random, auto-fill, playlist import/export.
+
+**M6 — Tag editing (3 wk).** Single and mass edit, dry-run diffs, write journal and undo, tags↔
+filename, artwork management, album operations.
+
+**M7 — Layout system (3 wk).** Layout documents, widget manifests, drag-to-rearrange, layout
+inspector, hot reload, `extends` + patches, shipped alternate layouts.
+
+**M8 — Theming and polish (2 wk).** Theme loader, theme editor, density modes, keybinding editor,
+accessibility pass (keyboard-complete, focus visible, screen reader labels), tray/notifications.
+
+**M9 — Migration and 1.0 (2 wk).** gmusicbrowser importer, iTunes/Rhythmbox import, dedupe UI,
+`anthemctl`, packaging (AppImage, Flatpak, `.deb`, Nix flake, MSI, `.dmg`), documentation.
+
+Post-1.0: plugin system, remote web UI, replay-gain scanner UI, lyrics/artist-info providers,
+visualizer library, multi-library support.
+
+---
+
+## 16. Decisions taken (and what would reverse them)
+
+| Decision | Reversal trigger |
+|---|---|
+| Tauri over Electron | WebKitGTK rendering divergence proves unfixable in M0–M1 |
+| Svelte 5 over React | Widget ecosystem need outweighs render cost — cheap to revisit, seam is small |
+| SQLite + in-memory mirror | Mirror memory exceeds budget at target sizes → SQL-only with better indexes |
+| libmpv default engine | Packaging friction on Windows/macOS → promote the symphonia backend |
+| lofty-rs for tags | A golden-file failure class it cannot fix → vendor a fork |
+| JSON layouts, not a DSL | Users find JSON hostile in practice → add a friendlier surface *above* JSON, never replace it |
+
+## 17. Open questions
+
+1. **Album identity.** See §17.1 below — expanded, because it is the decision most likely to be
+   discovered too late.
+2. **Multi-value artist storage.** Split `"A feat. B"` into two artists on import, or keep the raw
+   string and split only for display/filter? Proposal: store raw *and* derived, filter on derived —
+   costs storage, avoids destroying tags. Confirm before M1.
+3. **Stats write-back default.** Off is safer; on is what makes the library portable. Currently
+   specified off.
+4. **Video files.** gmusicbrowser tolerates them. Proposal: index and play audio-only, no video
+   window, in v1.
+5. **CUE sheets.** See §17.2 below.
+6. **Multi-library / profiles.** Deferred, but the DB path and config path are already parameterized
+   so it stays possible.
+
+### 17.1 Album identity (expanded)
+
+**The problem.** "Album" is not an entity in a music file — it is a *string* in a tag. Anthem has to
+manufacture an entity from it, and every reasonable rule is wrong somewhere:
+
+| Rule | Breaks on |
+|---|---|
+| `(artist, album)` | **Compilations.** A 20-artist soundtrack becomes 20 one-track albums. This is the single most common album-grouping bug in music players. |
+| `(album_artist, album)` | Files with no `album_artist` (very common in older rips) collapse into one giant untitled album, *and* "Greatest Hits" by four different artists merges into one. |
+| `(album_artist, album, year)` | A CD rip tagged 1973 and a remaster tagged 2011 split into two albums — sometimes right, sometimes not. |
+| folder path | Multi-disc albums stored as `Album/Disc 1`, `Album/Disc 2` split in two. Correct surprisingly often otherwise. |
+| `mb_release_id` | Precise and unambiguous — but most local libraries have it on well under half their files. |
+
+**Why it must be settled before M1.** `tracks.album_id` is a foreign key, and real data hangs off the
+album row: cover art, album ReplayGain, "date added", album-level user notes, and album-mode shuffle
+boundaries. If the identity rule changes in M5, every album row is re-derived and everything attached
+to the old rows is orphaned.
+
+**Decision, and the thing that makes it safe.** `albums` is a real table with a stable synthetic
+primary key. Identity is *computed* into a `match_key` column, not used *as* the key:
+
+```sql
+CREATE TABLE albums (
+  id         INTEGER PRIMARY KEY,        -- stable forever, survives rule changes
+  match_key  TEXT NOT NULL,              -- derived; recomputed when the rule or tags change
+  pinned     INTEGER NOT NULL DEFAULT 0, -- 1 = user merged/split this by hand; never auto-regroup
+  name       TEXT, album_artist_id INTEGER, year INTEGER,
+  mb_release_id TEXT,
+  UNIQUE(match_key)
+);
+```
+
+`match_key` resolution order:
+1. `mb_release_id` if present.
+2. `normalize(album_artist_or_artist) + '\x1f' + normalize(album) + '\x1f' + year`, where a track
+   whose album has ≥ 3 distinct artists and no `album_artist` is treated as a **compilation** and
+   drops the artist component entirely.
+3. Folder path as a tie-breaker *only* when the album name is empty or generic
+   (`Unknown Album`, `Various`, `CD1`).
+
+`normalize()` casefolds, strips diacritics, collapses whitespace, and removes a configurable
+edition-suffix list (`(Remastered)`, `[Deluxe Edition]`, `(2011 Remaster)`) into a separate
+`edition` field rather than discarding it.
+
+The `pinned` flag is what de-risks the whole decision: a user merge or split writes `pinned = 1`, and
+the rescan never overrides it. That means the heuristic can be **changed after 1.0** without
+destroying user intent — which turns an irreversible schema decision into a tunable one.
+
+**Still open:** whether a remaster is the same album as the original by default. Proposal: **no** —
+different `year` means different album, with a one-click "merge these" in the album view. Splitting
+is a smaller annoyance than silently merging two masterings and computing one album gain across both.
+
+### 17.2 CUE sheets (expanded)
+
+**What a CUE sheet is.** A single audio file — `Live at Leeds.flac`, a DJ mix, a full-album vinyl rip
+— plus a sidecar `.cue` text file (or a `CUESHEET` block embedded in the FLAC) that declares where
+each track starts. The tracks are real music but they are **not files**.
+
+**The question is one line of schema.** Today the spec says:
+
+```sql
+path TEXT NOT NULL UNIQUE       -- one row = one file
+```
+
+Supporting CUE means one row = one *time range in* a file, and that assumption is load-bearing in
+five places at once:
+
+| Subsystem | What changes |
+|---|---|
+| Schema | `UNIQUE(path)` → `UNIQUE(path, subtrack_index)`; add `start_ms`, `end_ms` |
+| In-memory index | `TrackIdx` is no longer 1:1 with a file; the scanner emits N rows per path |
+| Playback | Seek to `start_ms`, stop at `end_ms`; gapless *between* subtracks is free and perfect |
+| Tag writing | You cannot write per-track tags into a shared container. Subtrack tags live only in Anthem's DB, or get written back into the `.cue`. Mass tagging must refuse or redirect. |
+| Move detection | Subtracks share one `content_hash`; §9.1's logic needs a per-path grouping |
+| Fields | `filesize` per track is meaningless; `length` comes from the cue, not the file |
+
+**Why neither reference player helps here.** gmusicbrowser handles CUE only partially. Quod Libet
+4.7.1 has *no* CUE support at all — I checked its source; there is not a single reference to
+cuesheets in the codebase, and it is a decade-old open request there. So there is no prior art to
+copy, and no user expectation set by either.
+
+**Decision: reserve the schema at M1, ship the feature later.** Add the columns now with defaults
+that make them invisible:
+
+```sql
+subtrack_index INTEGER NOT NULL DEFAULT 0,
+start_ms       INTEGER,          -- NULL = whole file
+end_ms         INTEGER,
+UNIQUE(path, subtrack_index)
+```
+
+Three extra columns and a wider unique index cost effectively nothing at 250k rows, and the
+in-memory index gets built from row ids rather than paths from day one. That converts CUE from "an
+invasive M6 rewrite" into "an M-later parser plus a playback flag." If it never ships, the cost was
+three nullable columns.
+
+**Applies equally to:** embedded chapters in `.m4b` audiobooks and `.opus` chapter metadata, which
+have exactly the same shape. Reserving here reserves for those too.
+
+
+---
+
+## 18. Feature parity backlog — gmusicbrowser and Quod Libet
+
+This section is a **decision queue, not a commitment**. Every notable capability of both reference
+players is listed so nothing is lost by omission. Each item carries a status:
+
+- **In v1** — already specified in §§3–10 above; listed here for cross-reference.
+- **Decide** — genuinely open; needs a yes/no/when before the milestone that would host it.
+- **Post-1.0** — wanted, but scheduled after 1.0 unless promoted.
+- **Reject** — deliberately not doing it; reason given so it is not re-litigated.
+
+Where the two players solve the same problem differently, the difference is called out — those are
+the most interesting decisions in the document.
+
+### 18.1 Browsing and views
+
+| Capability | gmb | QL | Status | Note |
+|---|---|---|---|---|
+| Flat song list with configurable columns | ✓ | ✓ | **In v1** | §6.1 |
+| Grouped/tree song list (album headers) | SongTree | Album List | **In v1** | §6.1 |
+| Cascading filter panes | Browser panes | Paned Browser | **In v1** | §6.2 |
+| Album grid with cover art | ✓ | Album List | **In v1** | `albumgrid` widget |
+| Album *Collection* (albums grouped by artist/genre in a tree) | — | ✓ | **Decide** | QL-only; cheap once `albumgrid` exists |
+| Filesystem browser (browse by directory tree) | partial | ✓ | **Decide** | Real value for unscanned/loose files |
+| Playlist-as-browser (playlists are a browse mode) | ✓ | ✓ | **In v1** | Sidebar section |
+| Saved-search browser (searches listed like playlists) | ✓ | ✓ | **In v1** | §4.3 |
+| "Random album" / "choose random" actions | ✓ | — | **Decide** | One line of work; good for radio-mode users |
+| Duplicate browser | — | ✓ | **In v1** | §9.2 |
+| Missing/invalid files view | ✓ | ✓ | **In v1** | §9.1 |
+| Internet radio browser | — | ✓ | **Post-1.0** | Needs a stream engine path and a station DB |
+| Podcast / audio feeds | — | ✓ | **Post-1.0** | Large surface: subscriptions, downloads, resume, unplayed state |
+| Soundcloud browser | — | ✓ | **Reject** | Third-party API that keeps breaking; not local-library work |
+| Cover-art-only "wall" fullscreen mode | ✓ | ✓ | **Decide** | Fullscreen layout, not a separate feature, once §5 exists |
+| Column presets / quick column sets | ✓ | ✓ | **Decide** | Layout `extends` may cover this already |
+| Sticky/pinned filter presets on a toolbar | ✓ | — | **Decide** | gmb's FilterBox widget |
+
+### 18.2 Query, filtering, playlists
+
+| Capability | gmb | QL | Status | Note |
+|---|---|---|---|---|
+| Full filter algebra over every field | ✓ | ✓ | **In v1** | §4.1 |
+| Text query language in a single box | smart strings | `#(rating > 3)` syntax | **In v1** | §4.4 — Anthem's own syntax, both importable |
+| Regex matching on any field | ✓ | ✓ (Python `re`) | **In v1** | `regex` op; Rust `regex` crate, no backrefs |
+| Numeric comparison with units (`#(length > 4:00)`) | ✓ | ✓ | **In v1** | Duration/date literals in the parser |
+| Relative-date queries (`#(lastplayed < 7 days)`) | ✓ | ✓ | **In v1** | `in_last` |
+| Top-N / bottom-N by field | ✓ | — | **In v1** | `top` / `bottom` |
+| Saved filters composable inside other filters | ✓ | ✓ | **In v1** | `in_filter`, cycle-checked |
+| Smart playlist limits (count / duration / size) | ✓ | ✓ | **In v1** | §4.3 |
+| Weighted random by rating/play count | ✓ | ✓ | **In v1** | §4.3 |
+| Static playlists with manual ordering | ✓ | ✓ | **In v1** | |
+| Playlist folders / nesting | — | — | **Decide** | Neither has it; large libraries want it |
+| Query "shortcuts"/aliases (`@shortcut`) | — | ✓ | **Decide** | Nice ergonomics; trivial atop `in_filter` |
+| Per-pane multi-select semantics (OR within, AND across) | ✓ | ✓ | **In v1** | §6.2 |
+| Filter history / back-forward through views | ✓ | — | **Decide** | gmb's HistItem; genuinely useful, small |
+| Playlist import/export (M3U/PLS/XSPF) | ✓ | ✓ | **In v1** | §9.3 |
+| CUE sheet support (virtual tracks from one file) | partial | ✗ | **Decide** | Neither reference player does this properly (QL 4.7.1 has no CUE code at all). Affects the track identity model — reserve schema at M1, §17.1 |
+
+### 18.3 Tagging and library
+
+| Capability | gmb | QL | Status | Note |
+|---|---|---|---|---|
+| Mass tag editing with `<multiple>` handling | ✓ | ✓ | **In v1** | §7.2 |
+| Tags-from-filename with pattern preview | ✓ | ✓ | **In v1** | §7.2 |
+| Filename-from-tags / organize files | ✓ | ✓ | **In v1** | §7.2 |
+| Find & replace across a field, regex | ✓ | ✓ | **In v1** | §7.2 |
+| Title-case / case transforms with exceptions | ✓ | ✓ | **In v1** | §7.2 |
+| Split/merge multi-value tags | ✓ | ✓ | **In v1** | §7.2 |
+| Standalone tag editor app | — | ✓ (Ex Falso) | **Decide** | Anthem could ship the tag editor as a separate window/binary |
+| Arbitrary user-defined fields | ✓ | ✓ | **In v1** | §3.1 |
+| Free-form labels/tags on tracks | ✓ | ✓ (`~grouping`) | **In v1** | `tags` set field |
+| Preserve unknown tag frames | ✓ | ✓ | **In v1** | §7.1 — hard requirement |
+| Undo for tag writes | — | — | **In v1** | §7.1; neither reference player has this and both should |
+| Embedded artwork read/write, multiple image types | ✓ | ✓ | **In v1** | §7.3 |
+| External cover art discovery by filename pattern | ✓ | ✓ | **In v1** | §7.3 |
+| Cover art fetching from the web | ✓ (plugin) | ✓ (plugin) | **Post-1.0** | Plugin, §11 |
+| Lyrics: embedded read/write | ✓ | ✓ | **In v1** | `lyrics` field |
+| Lyrics: web fetch + local `.lrc` files | ✓ | ✓ | **Post-1.0** | Synced-lyrics display is its own widget |
+| Karaoke / synced lyric highlight | ✓ | — | **Post-1.0** | Depends on `.lrc` support |
+| Artist info / album info panels (Wikipedia, allmusic) | ✓ | ✓ | **Post-1.0** | Plugin; `contextpanel` widget hosts it |
+| Web context panel (arbitrary URL templated on now-playing) | ✓ | ✓ | **Post-1.0** | Cheap and surprisingly useful |
+| MusicBrainz lookup / tag from MB | — | ✓ (plugin) | **Post-1.0** | Not competing with Picard, but a per-album lookup is reasonable |
+| AcoustID / fingerprinting | — | ✓ (plugin) | **Decide** | Only worth it if dedupe demands it |
+| CD ripping | ✓ (plugin) | — | **Reject** | Solved better by dedicated tools |
+| Library statistics / "song info" summary | ✓ | ✓ | **Decide** | Aggregate view: totals, top artists, listening over time |
+| Import ratings/playcounts from other players | ✓ | ✓ (plugins) | **In v1** | §9.3 |
+| Export library to CSV/JSON/HTML | ✓ | ✓ | **In v1** | §9.3 |
+| Auto library update on file change | ✓ | ✓ | **In v1** | §9.1 |
+| Moved-file detection preserving stats | partial | partial | **In v1** | §9.1 |
+| Multiple libraries / profiles | — | — | **Post-1.0** | §17.5 |
+| Trash/delete files from within the app | ✓ | ✓ | **Decide** | Needs a confirmation model; easy to regret |
+
+### 18.4 Playback
+
+| Capability | gmb | QL | Status | Note |
+|---|---|---|---|---|
+| Gapless playback | ✓ | ✓ | **In v1** | §8.2 |
+| Crossfade | ✓ | ✓ | **In v1** | §8.2 |
+| ReplayGain apply (track/album, preamp, limiter) | ✓ | ✓ | **In v1** | §8.2 |
+| ReplayGain/R128 scanning built in | — | ✓ (plugin) | **In v1** | §8.2 background job |
+| Queue separate from playlist | ✓ | ✓ | **In v1** | §8.2 |
+| Queue modes (ignore/keep/exclusive) | partial | ✓ | **Decide** | QL's "queue disables shuffle" nuances are worth copying |
+| Auto-fill queue from a filter when it empties | ✓ | — | **In v1** | §8.2 — a signature gmb feature |
+| Lock to artist/album/filter | ✓ | — | **In v1** | §8.2 |
+| Repeat all / one / album | ✓ | ✓ | **In v1** | |
+| Shuffle by track / by album | ✓ | ✓ | **In v1** | |
+| Weighted/smart shuffle | ✓ | ✓ | **In v1** | §4.3 |
+| Equalizer | ✓ | ✓ | **In v1** | §8.2 |
+| Playback speed / pitch | — | ✓ | **In v1** | §8.2 |
+| Sleep timer / fade-to-sleep ("lullaby") | ✓ (plugin) | ✓ (plugin) | **Decide** | Small, well-loved |
+| Bookmarks within a track | ✓ | ✓ | **In v1** | §8.2 |
+| Resume playback position on launch | ✓ | ✓ | **In v1** | §8.2 |
+| Stop after current track | ✓ | ✓ | **Decide** | Trivial; just needs a home in the UI |
+| Waveform seekbar | — | ✓ (plugin) | **Post-1.0** | Requires a background analysis pass + cache |
+| Visualizer | ✓ | — | **Post-1.0** | Web Audio makes this the easiest win Anthem has |
+| Output device selection | ✓ | ✓ | **In v1** | Delegated to mpv |
+| Streaming out (Icecast/DLNA server) | ✓ (iceserver) | — | **Reject** | Out of scope; a separate daemon's job |
+| Play remote/streaming URLs ad hoc | ✓ | ✓ | **Decide** | Cheap via mpv; the *library* side is what's expensive |
+
+### 18.5 UI, layout, theming
+
+| Capability | gmb | QL | Status | Note |
+|---|---|---|---|---|
+| Fully user-composed window layout | ✓ (`.layout`) | — | **In v1** | §5 — Anthem's headline feature |
+| Multiple shipped layouts, switchable at runtime | ✓ | — | **In v1** | §5.3 |
+| Detached/floating panel windows | ✓ | — | **Decide** | Multi-window in a WebView shell is real work |
+| Desktop widget mode (borderless always-on-top) | ✓ (plugin) | — | **Decide** | Falls out of layouts + a window-mode flag |
+| Fullscreen "now playing" mode | ✓ | ✓ | **In v1** | A shipped layout |
+| Mini/compact player mode | ✓ | ✓ | **In v1** | A shipped layout |
+| Tray icon with menu and scroll-volume | ✓ | ✓ | **In v1** | §10 |
+| Title-bar / taskbar now-playing text | ✓ (plugin) | ✓ | **In v1** | Format strings, §5.5 |
+| Desktop notifications with art | ✓ | ✓ | **In v1** | §10 |
+| Configurable context menus | ✓ | ✓ | **In v1** | §6.1 |
+| Rebindable keyboard shortcuts | partial | ✓ | **In v1** | §10 |
+| Global media keys | ✓ | ✓ | **In v1** | §10 |
+| Theming beyond the toolkit theme | limited | limited | **In v1** | §5.4 — the other headline feature |
+| Density / compact modes | — | ✓ | **In v1** | §5.4, from Halon's density scale |
+| Icon theme override | ✓ | ✓ | **Decide** | Ship one icon set; allow replacement via theme dir |
+| Localization / translations | ✓ (30+) | ✓ | **Post-1.0** | String extraction from day one, translation after 1.0 |
+| Accessibility: full keyboard + screen reader | weak | weak | **In v1** | §M8 — both references are poor here; not an excuse |
+
+### 18.6 Integration and automation
+
+| Capability | gmb | QL | Status | Note |
+|---|---|---|---|---|
+| MPRIS2 | ✓ | ✓ | **In v1** | §10 |
+| Last.fm scrobbling | ✓ | ✓ | **In v1** | §10 |
+| ListenBrainz | — | ✓ | **In v1** | §10 |
+| Command-line control | ✓ | ✓ (`quodlibet --next`) | **In v1** | `anthemctl`, §10 |
+| Named-pipe/FIFO control | ✓ | — | **Reject** | Superseded by the HTTP API + CLI |
+| HTTP remote control / web UI | — | ✓ (plugin) | **In v1** (API) / **Post-1.0** (web UI) | §10 |
+| "Run a command on track change" hooks | ✓ | ✓ | **Decide** | Powerful and a security surface; needs an explicit opt-in model |
+| Custom user commands on selection (`%f`, `%s`) | ✓ | ✓ | **Decide** | Same decision as above |
+| Squeezebox / MQTT / external device sync | — | ✓ (plugins) | **Reject** | Plugin territory if anyone wants it |
+| Portable-device sync (MTP/iPod) | — | ✓ (plugin) | **Post-1.0** | Plugin, §11 |
+| Plugin system | ✓ (Perl) | ✓ (Python, ~100 plugins) | **Post-1.0** | §11 |
+| Autosave / crash-safe library persistence | ✓ (plugin) | ✓ | **In v1** | SQLite WAL makes this structural, not a plugin |
+
+### 18.7 Things neither has that Anthem should decide on
+
+| Idea | Status | Note |
+|---|---|---|
+| Tag-write undo journal | **In v1** | §7.1 |
+| Content-hash move detection | **In v1** | §9.1 |
+| Filter AST as a first-class shareable artifact | **In v1** | §4.1 |
+| Listening-history analytics (year in review, trends) | **Decide** | The data is already there; the UI is the cost |
+| Multi-device library sync (stats only, CRDT) | **Post-1.0** | Big, but the play/skip history model is already append-only |
+| Rating propagation rules (rate an album → rate its tracks) | **Decide** | Small, opinionated, easy to get wrong |
+| Library health report (missing art, no genre, bad encodings) | **Decide** | A set of shipped smart filters may be enough |
+
+### 18.8 How these get decided
+
+Every **Decide** row must be resolved before the milestone that would host it: browsing/query items
+before M2, tagging before M6, playback before M3, UI/layout before M7, integration before M9.
+Resolution means moving the row to **In v1**, **Post-1.0**, or **Reject** with a one-line reason —
+this table is the record, and it gets edited in place rather than appended to.
+
+
+---
+
+## Appendix A — Language and stack evaluation
+
+The v0.1 draft picked Rust without arguing the alternative. This appendix does the comparison
+properly, because "ease of development" is a legitimate first-order requirement, not a compromise.
+
+### A.1 How much of this spec actually depends on the language?
+
+Very little. Sections 3 (data model), 4 (query engine), 5 (layout and theming), 6 (interaction),
+7 (tag semantics), 9 (library management), 10 (integrations), 11 (plugins), 13 (testing) and 18
+(parity backlog) are **stack-independent** — they describe schemas, grammars, formats and behaviour.
+Only §2 (architecture), §12 (performance budget) and §14 (repo layout) change.
+
+That is the important framing: choosing wrong here costs a rewrite of the *plumbing*, not of the
+design.
+
+### A.2 Where the requirements actually put pressure
+
+| Requirement | Language-sensitive? | Notes |
+|---|---|---|
+| Gapless playback, format coverage, ReplayGain | **No** | mpv does it. Every language talks to mpv over a JSON IPC socket. A complete wash. |
+| SQLite library, FTS5 search | **No** | `better-sqlite3` (synchronous, C++), Python `sqlite3`, and `rusqlite` are all fast enough. |
+| 250k-row filter / group-by at interactive speed | **Somewhat** | Rust wins, but SQLite indexes carry most of it. JS TypedArrays + `roaring-wasm` gets ~80% of the Rust plan; Python needs numpy to compete. |
+| Scanning 100k files | **Somewhat** | Rust ≈ 3–5× faster. This is background work that happens once — a 4-minute scan becoming 12 minutes is annoying, not disqualifying. |
+| **Lossless tag read/write, unknown-frame preservation** | **Yes — the real pressure point** | See A.3. |
+| Virtualized 60 fps list | **No** | Renderer-side in all three; identical code. |
+| Packaging and install size | **Yes** | Rust/Tauri ≪ Electron ≪ Python. |
+| Development velocity | **Yes, inverted** | TypeScript ≫ Python > Rust for this app's shape. |
+
+### A.3 The tag library is the deciding factor
+
+§7.1 makes a hard promise: *"Anthem is not allowed to lose a tag it does not understand."* That
+promise is only as good as the library behind it.
+
+| Library | Language | Assessment |
+|---|---|---|
+| **mutagen** | Python | The gold standard. Powers Quod Libet and MusicBrainz Picard. Two decades of real-world ugly-file hardening. Nothing else is close. |
+| **lofty-rs** | Rust | Good, modern, actively maintained, broad format coverage. Younger, less battle-scarred. |
+| **node-taglib-sharp** | TypeScript | A real port of the mature taglib-sharp, and it *writes*. Less proven than either of the above. |
+| **music-metadata** | TypeScript | Excellent reader — but **read-only**. Disqualifying on its own. |
+
+This is the one place where Python has a decisive technical advantage over both alternatives.
+
+### A.4 The three candidate stacks
+
+**Stack A — Rust core + web UI (the v0.1 draft).**
+Tauri 2 · Rust · rusqlite · lofty · libmpv · Svelte.
+*Best at:* raw performance headroom, 40 MB installs, ~200 MB RSS, million-track libraries, and a
+compiler that makes the field-descriptor and filter-AST systems genuinely hard to get wrong.
+*Costs:* slowest to write, by a lot. Three WebView engines (§6.4) means real CSS divergence work.
+Every UI iteration crosses a compile boundary.
+
+**Stack B — TypeScript end to end. ← recommended**
+Electron · TypeScript · better-sqlite3 · node-taglib-sharp · mpv over JSON IPC · Svelte 5.
+*Best at:* velocity. One language, one type system, one build, shared types across the IPC boundary
+with zero codegen. Instant reload on both sides. One rendering engine, so §6.4's CSS restrictions
+evaporate — `:has()`, container queries and subgrid all become available, which measurably helps a
+layout-heavy app. The largest ecosystem for virtualization, drag-and-drop and editors.
+*Costs:* ~150 MB install, ~350–500 MB RSS for an always-running app. The tag library is the least
+proven of the three. Main-thread blocking is a real hazard and must be designed against (A.6).
+
+Note the forced link: **choosing TypeScript means choosing Electron, not Tauri.** Tauri's backend
+*is* Rust — pairing it with TypeScript means shipping a Node sidecar alongside a Rust shell, which
+is the worst of both worlds.
+
+**Stack C — Python core + web UI.**
+pywebview or Electron shell · Python · mutagen · python-mpv · FastAPI-style local IPC.
+*Best at:* mutagen, unambiguously. Fast to write for scan/tag logic.
+*Costs:* desktop packaging is the worst of the three by a wide margin (PyInstaller/Briefcase, or
+requiring a system Python). The GIL makes the in-memory index awkward without numpy. And the UI is
+TypeScript regardless — so you get two languages anyway, without Rust's compensating benefits.
+
+### A.5 Recommendation
+
+**Stack B**, with one deliberate escape hatch.
+
+The reasoning: mpv neutralizes the playback argument entirely, SQLite neutralizes most of the query
+argument, and scanning speed is background work. That strips Rust's advantage down to *memory
+footprint* and *headroom above 250k tracks* — real, but not worth a 2–3× slowdown in every UI
+iteration on a project whose headline features (§5 layout, §5.4 theming) are **both** UI work.
+
+The escape hatch, mirroring the `PlaybackEngine` trait: **all tag I/O sits behind a `TagIO`
+interface** with exactly four methods (`read`, `write`, `readArtwork`, `writeArtwork`). The default
+implementation is node-taglib-sharp. The golden-file suite in §13 is what validates it — and if it
+fails a class of real-world files it cannot fix, swap in a **mutagen sidecar** (a ~200-line Python
+process speaking JSON over stdio) without touching a single line of the rest of the app.
+
+That structure means the riskiest part of Stack B is also its most isolated part, and the decision is
+testable in M1 rather than being a bet made now.
+
+**Pick Stack A instead if** any of these become true: libraries beyond ~1M tracks are a target,
+polished cross-platform distribution matters more than iteration speed, or idle RSS above 300 MB is
+unacceptable.
+
+### A.6 What changes in the spec under Stack B
+
+**§2.1 / §2.2 — Architecture.** Electron with three processes: main (library, query, tag, playback
+supervision), a `worker_threads` pool (scanning, hashing, index building — this is mandatory, not
+optional, because a blocked main thread stalls audio *control* and the UI simultaneously), and the
+renderer. IPC via `contextBridge` with a shared TypeScript type module — no codegen step.
+
+**§3.5 — In-memory index.** `Int32Array`/`Float64Array` columns instead of `Vec<T>`; `roaring-wasm`
+instead of the `roaring` crate; a `Map<string, number>` symbol table with precomputed
+`Intl.Collator` sort keys. Built inside a worker and transferred as `SharedArrayBuffer`, so the
+main thread never blocks on it.
+
+**§8.1 — Playback.** mpv over its JSON IPC socket, still behind the `PlaybackEngine` interface. The
+symphonia fallback is replaced by "Web Audio in the renderer" as the dependency-free path — weaker on
+format coverage, fine as a fallback.
+
+**§12 — Performance budget, relaxed and re-baselined:**
+
+| Operation | Stack A | Stack B |
+|---|---|---|
+| Cold start → interactive (250k) | 3 s | 4 s |
+| In-memory index load | 1.5 s | 2.5 s |
+| Filter (any AST) | 100 ms | 150 ms |
+| Sort by any column | 150 ms | 250 ms |
+| Group-by for a filter pane | 80 ms | 120 ms |
+| Search keystroke → results | 50 ms | 60 ms |
+| Scroll frame | 16 ms | 16 ms (unchanged) |
+| Full scan, 100k files | 4 min | 10 min |
+| Idle RSS (playing, 250k) | < 400 MB | < 600 MB |
+| Install size | ~40 MB | ~150 MB |
+
+**§14 — Repository layout:**
+
+```
+anthem/
+├── src/
+│   ├── main/            # Electron main: library, query, tags, playback, services
+│   │   ├── library/     # index, scanner, watcher, dedupe
+│   │   ├── query/       # filter AST, SQL compiler, native predicate, search parser
+│   │   ├── tags/        # TagIO interface + taglib-sharp impl + write journal
+│   │   ├── play/        # PlaybackEngine interface + mpv impl
+│   │   └── services/    # MPRIS, scrobble, hotkeys, HTTP API
+│   ├── workers/         # scan, hash, index-build, replaygain
+│   ├── shared/          # types, field descriptors, format strings, filter AST — imported by BOTH sides
+│   └── renderer/        # layout engine, widgets, theme runtime, stores
+├── fields/  layouts/  themes/  docs/  bench/
+└── cli/                 # anthemctl
+```
+
+The `shared/` directory is Stack B's main structural payoff: the filter AST, field descriptors and
+format-string parser are written **once** and used by the query engine and the UI editor that builds
+queries — in Stack A that is either duplicated or code-generated.
+
+**§13 — Testing.** `fast-check` replaces `proptest` for the AST-agreement property test. Golden-file
+tag tests become the highest-priority suite in the repo, since they are what validates the A.5
+escape hatch. Playwright covers one engine instead of three.
+
+**§16 — Decisions table** gains: *TypeScript/Electron over Rust/Tauri — reverse if RSS or
+million-track performance becomes binding, or if golden-file tests condemn the JS tag layer and the
+mutagen sidecar proves awkward.*
