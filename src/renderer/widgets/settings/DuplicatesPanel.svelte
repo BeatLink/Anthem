@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { ipc } from '../../lib/ipc'
   import type { DuplicateGroup, DuplicateReason } from '@shared/ipc'
   import MergeDialog from '../MergeDialog.svelte'
   import { library } from '../../stores/library.svelte'
@@ -28,7 +29,7 @@
     busy = true
     error = null
     try {
-      groups = await window.anthem['tracks:duplicates']({
+      groups = await ipc('tracks:duplicates', {
         reasons: REASONS.map((r) => r.id).filter((r) => enabled[r]),
         lengthToleranceMs: tolerance * 1000,
         limit: MAX_SHOWN

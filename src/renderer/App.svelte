@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { ipc } from './lib/ipc'
   import { onMount } from 'svelte'
   import type { AppInfo, SafetyStatus } from '@shared/ipc'
   import { library } from './stores/library.svelte'
@@ -18,8 +19,8 @@
   let settingsSection = $state<'library' | 'folders' | 'import' | 'duplicates' | 'appearance' | 'about'>('library')
 
   onMount(async () => {
-    info = await window.anthem['app:info']()
-    safety = await window.anthem['app:safety']()
+    info = await ipc('app:info')
+    safety = await ipc('app:safety')
     await library.refresh()
     // Open settings on the Import tab when there is nothing to look at yet.
     if ((library.stats?.tracks ?? 0) === 0) {

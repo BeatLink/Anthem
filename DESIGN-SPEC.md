@@ -119,6 +119,16 @@ Three execution contexts, and the split is not optional:
 IPC is `contextBridge` over the contract in `src/shared/ipc.ts`. Because both sides import the same
 module, the boundary is typechecked end to end with no codegen step.
 
+**One hazard is worth writing down, because it cost a wrong fix.** Svelte 5 wraps reactive arrays
+and objects in Proxies, and `contextBridge` clones arguments as they cross from the page's world
+into the preload's isolated world — a clone that happens *before* any preload code runs. So a
+Proxy argument fails with "An object could not be cloned" no matter what the preload does; the
+flattening has to happen in the renderer. Every call therefore goes through `src/renderer/lib/ipc.ts`
+rather than touching `window.anthem` directly.
+
+The symptom is easy to misread: the handler never runs, so nothing appears in the main process log,
+which looks like a return-value problem rather than an argument one.
+
 ### 2.4 The UI-agnostic boundary
 
 The single most valuable structural decision in the codebase: **anything expensive to rewrite lives

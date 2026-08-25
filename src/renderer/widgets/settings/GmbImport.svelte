@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { ipc } from '../../lib/ipc'
   import { onMount } from 'svelte'
   import type { GmbPreview, ImportReport } from '@shared/ipc'
   import { library } from '../../stores/library.svelte'
@@ -17,7 +18,7 @@
 
   onMount(async () => {
     try {
-      path = await window.anthem['import:gmbDefaultPath']()
+      path = await ipc('import:gmbDefaultPath')
       await check()
     } catch (err) {
       error = `Could not reach the main process: ${(err as Error).message}`
@@ -28,7 +29,7 @@
     if (!path) return
     try {
       error = null
-      preview = await window.anthem['import:gmbPreview'](path)
+      preview = await ipc('import:gmbPreview', path)
     } catch (err) {
       error = (err as Error).message
     }
@@ -36,7 +37,7 @@
 
   async function browse(): Promise<void> {
     try {
-      const picked = await window.anthem['import:gmbBrowse']()
+      const picked = await ipc('import:gmbBrowse')
       if (picked) {
         path = picked
         await check()
@@ -50,7 +51,7 @@
     busy = true
     error = null
     try {
-      report = await window.anthem['import:gmbRun']({ path, statistics, labels, playlists })
+      report = await ipc('import:gmbRun', { path, statistics, labels, playlists })
       await library.refresh()
     } catch (err) {
       error = (err as Error).message
@@ -62,7 +63,7 @@
   async function reset(): Promise<void> {
     busy = true
     try {
-      await window.anthem['library:reset']()
+      await ipc('library:reset')
       report = null
       await library.refresh()
     } finally {

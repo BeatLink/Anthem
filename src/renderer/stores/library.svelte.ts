@@ -1,3 +1,4 @@
+import { ipc } from '../lib/ipc'
 // View-model state for the library.
 //
 // The filter stack and sort state come from shared/view.ts, which is framework-free; this class is
@@ -101,11 +102,11 @@ class LibraryStore {
   async refresh(): Promise<void> {
     try {
       this.error = null
-      this.stats = await window.anthem['library:stats']()
+      this.stats = await ipc('library:stats')
 
       const req = { filter: this.filter(), sort: [...this.sort.list()], limit: { count: PAGE } }
-      this.tracks = await window.anthem['library:query'](req)
-      this.lastSql = (await window.anthem['library:explain'](req)).sql
+      this.tracks = await ipc('library:query', req)
+      this.lastSql = (await ipc('library:explain', req)).sql
 
       // A narrowed result set must not leave selections pointing at rows nobody can see.
       this.selection.retain(this.tracks.map((t) => t.id))
@@ -118,7 +119,7 @@ class LibraryStore {
 
   async groupsFor(fieldId: string): Promise<GroupRow[]> {
     try {
-      return await window.anthem['library:groupBy']({ filter: this.filter(), field: fieldId })
+      return await ipc('library:groupBy', { filter: this.filter(), field: fieldId })
     } catch (err) {
       this.error = (err as Error).message
       return []

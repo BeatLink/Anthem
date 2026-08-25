@@ -2,6 +2,7 @@
   // Resolution is per field, following Thunderbird CardBook: the right answer is usually spread
   // across sources rather than concentrated in one winning record.
 
+  import { ipc } from '../lib/ipc'
   import { onMount } from 'svelte'
   import type { MergePreview, MergeResult, Resolution } from '@shared/ipc'
   import { library } from '../stores/library.svelte'
@@ -18,7 +19,7 @@
 
   onMount(async () => {
     try {
-      preview = await window.anthem['tracks:mergePreview'](ids)
+      preview = await ipc('tracks:mergePreview', ids)
       survivor = preview.survivor
     } catch (err) {
       error = (err as Error).message
@@ -47,7 +48,7 @@
     busy = true
     error = null
     try {
-      result = await window.anthem['tracks:merge']({
+      result = await ipc('tracks:merge', {
         ids: preview.ids, survivor, resolutions: choices
       })
       await library.refresh()
@@ -62,7 +63,7 @@
     if (!result) return
     undoing = true
     try {
-      await window.anthem['tracks:unmerge'](result.batchId)
+      await ipc('tracks:unmerge', result.batchId)
       await library.refresh()
       onclose?.(false)
     } catch (err) {

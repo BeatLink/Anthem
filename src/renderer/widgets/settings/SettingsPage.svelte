@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { ipc } from '../../lib/ipc'
   import { untrack } from 'svelte'
   import type { AppInfo, SafetyStatus } from '@shared/ipc'
   import { library } from '../../stores/library.svelte'
@@ -48,7 +49,7 @@
   async function clearLibrary(): Promise<void> {
     clearing = true
     try {
-      await window.anthem['library:reset']()
+      await ipc('library:reset')
       await library.refresh()
     } finally {
       clearing = false

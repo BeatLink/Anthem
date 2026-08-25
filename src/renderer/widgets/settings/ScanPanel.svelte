@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { ipc } from '../../lib/ipc'
   import { onMount } from 'svelte'
   import type { FileOutcome, FileResult, Root, ScanProgress, ScanReport } from '@shared/ipc'
   import { library } from '../../stores/library.svelte'
@@ -62,7 +63,7 @@
 
   async function load(): Promise<void> {
     try {
-      roots = await window.anthem['library:roots']()
+      roots = await ipc('library:roots')
     } catch (err) {
       error = (err as Error).message
     }
@@ -71,7 +72,7 @@
   async function add(): Promise<void> {
     try {
       error = null
-      const added = await window.anthem['library:addRoot']()
+      const added = await ipc('library:addRoot')
       if (added) await load()
     } catch (err) {
       error = (err as Error).message
@@ -79,7 +80,7 @@
   }
 
   async function remove(id: number): Promise<void> {
-    await window.anthem['library:removeRoot'](id)
+    await ipc('library:removeRoot', id)
     await load()
   }
 
@@ -91,7 +92,7 @@
     follow = true
     scanning = true
     try {
-      await window.anthem['library:scan']()
+      await ipc('library:scan')
     } catch (err) {
       error = (err as Error).message
       scanning = false
@@ -100,7 +101,7 @@
   }
 
   async function cancel(): Promise<void> {
-    await window.anthem['library:scanCancel']()
+    await ipc('library:scanCancel')
   }
 
   const pct = $derived(
