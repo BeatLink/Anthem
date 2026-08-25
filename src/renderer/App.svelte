@@ -15,7 +15,7 @@
   let rightTab = $state<'library' | 'context'>('library')
   let density = $state<'compact' | 'normal' | 'comfortable'>('normal')
   let showSettings = $state(false)
-  let settingsSection = $state<'library' | 'folders' | 'import' | 'appearance' | 'about'>('library')
+  let settingsSection = $state<'library' | 'folders' | 'import' | 'duplicates' | 'appearance' | 'about'>('library')
 
   onMount(async () => {
     info = await window.anthem['app:info']()

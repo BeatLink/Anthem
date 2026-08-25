@@ -211,6 +211,41 @@ These are many-to-many, autocompleted, colour-assignable, and filterable with se
 Any number, of any type in §3.3, with an optional tag mapping. A user field with a tag mapping
 round-trips to files; without one it lives only in Anthem's database.
 
+### 3.2.1 Every field is a first-class field
+
+**The rule, without exceptions:** any field — built in, derived from a tag, or defined by the user —
+is filterable, sortable, groupable, and available as a song-list column. There is no second tier of
+"extra" metadata that the UI can only display.
+
+This is why §3.1 makes a field a *descriptor* rather than a column. A descriptor carries its storage
+strategy, filter operators, sort key, group-by function and display format, so everything downstream
+is generic over it:
+
+| Consumer | How it stays generic |
+|---|---|
+| Filter compilers | Dispatch on `storage` (§3.5.2) and `type` (§3.3); no field is named in either compiler |
+| Column picker | Lists `fieldsWith('columnar')`; a new field appears without touching the widget |
+| Filter panes | Any `groupable` field is selectable in a pane, including user-defined ones |
+| Sort | Any `sortable` field is a sort key, in any position of a multi-key sort (§4.3.1) |
+| Format strings | `{any_field}` resolves through the same descriptor lookup (§5.5) |
+| Tag round-trip | A user field with a `tags` mapping writes to files; without one it lives only in the database |
+
+`test/unit/fields.test.ts` already asserts the invariants this depends on — unique ids, a stable
+numeric id for every multi-value and extra field, and an expression for every computed field.
+
+**What is still missing to make the promise true end to end:**
+
+1. **A field editor.** User-defined fields exist in the storage model (`track_extras`, and
+   `field_id`-discriminated `track_values`) but there is no UI to define one. It needs: id, display
+   name, type, single or multi-value, and an optional per-container tag mapping.
+2. **Persisting user fields.** The catalogue is currently a TypeScript constant. User fields need a
+   `fields` table, merged with the built-ins at startup, with numeric ids allocated from a range
+   that can never collide with built-in ids.
+3. **A column picker** in the song-list header context menu, driven by `fieldsWith('columnar')`.
+4. **Derived-field expressions.** `storage: 'computed'` exists and is used for `album`, but the
+   expression is authored in TypeScript. Letting a user write one means a small safe expression
+   language over other fields — deliberately not raw SQL, which would be an injection surface.
+
 ### 3.3 Type descriptors
 
 Each type supplies: storage encoding, display formatter, sort key, valid filter operators, group-by
@@ -786,6 +821,40 @@ The active query is a visible stack of chips: `Library → genre: Jazz → ratin
 Each chip is removable and reorderable; the stack is the AST. This replaces the "where did this view
 come from?" confusion that browse-by-panes normally causes.
 
+### 6.5 Song properties — next up
+
+A dedicated view for everything Anthem knows about one track. This is the first place the entity
+model becomes visible to the user, and it is the natural home for several features that currently
+have nowhere to live.
+
+**Sections:**
+
+1. **Identity** — title, artist, album, and *how the track was identified*: `identity_source`
+   (`manual` / `mbid` / `acoustid` / `audio_hash` / `heuristic`), `identity_key`, and whether it is
+   `pinned`. A user who wonders "why are these one track?" should find the answer here.
+2. **Sources** — the point of the panel. One row per `media`, showing:
+   - path or provider URI, and whether the file is currently `present`
+   - codec, bitrate, sample rate, channels, bit depth, file size, modification time
+   - `audio_hash` and which algorithm produced it, so `sha256-file` (weaker, changes on retag) is
+     distinguishable from `flac-streaminfo-md5` at a glance
+   - `subtrack_index` / `start_ms` / `end_ms` when the source is a range inside a container
+   - which source is preferred for playback, and why (`quality_rank`)
+   - per-source actions: reveal in file manager, copy path, prefer this source, forget this source
+3. **Tags** — the raw per-source tags from `media_tags`, shown *side by side when sources
+   disagree*. Two files backing one track can carry different tags, and §3.5.1 already stores both
+   rather than losing the disagreement; this is where that becomes useful.
+4. **Statistics** — rating, play and skip counts, first and last played, and the full play history
+   as a small timeline. These belong to the track, not the file, which the panel should make
+   evident.
+5. **Merge provenance** — if the track was merged, what it absorbed and a link to undo it (§9.4.3).
+
+**Why it is worth doing early:** every question a user asks about the entity model ("where are my
+files?", "which copy plays?", "is this one track or two?", "did my rating survive?") is answered by
+this one view. It is also read-only, so it carries none of the risk of the tag editor.
+
+**What is needed:** an IPC channel returning a track with its media, raw tags, and history; a
+`contextpanel` tab plus a standalone window; and the reveal-in-file-manager shell call.
+
 ### 6.4 CSS baseline
 
 Because three WebView engines: no `:has()` in load-bearing positions (WebKitGTK lag), no container
@@ -831,6 +900,61 @@ Writing rules:
 - A dry-run diff view before any mass write, showing per-file before/after per-field.
 - Every write is journaled (`tag_writes` table) with the prior value, so a mass edit is undoable for
   N days.
+
+### 7.1.1 MusicBrainz Picard integration
+
+Anthem is not going to out-Picard Picard (§1.1). Picard has acoustic fingerprinting, the full
+MusicBrainz release model, a plugin ecosystem and years of edge-case handling for exactly the job of
+*deciding what a file is*. Reimplementing that would be a bad use of the project's time and would be
+worse at it.
+
+So the position is: **Anthem owns the library; Picard owns authoritative tagging.** The integration
+makes them cooperate rather than compete.
+
+#### 7.1.1.1 What it looks like
+
+Three levels, in increasing order of effort.
+
+**1. Hand off a selection (small, high value).** A context-menu action that launches Picard with the
+selected tracks' files as arguments — Picard accepts file and directory paths on the command line.
+The user tags in Picard, saves, and returns; Anthem rescans just those paths and picks up the
+changes. The path to the Picard binary is a setting, discovered from `PATH` by default. This is
+close to free and covers most real use.
+
+**2. Notice what Picard did (the part that needs care).** Picard *writes* files, which collides with
+two of Anthem's invariants:
+
+- **Read-only mode (§7.0) does not protect against this** — the writes come from another process.
+  That is fine and intended, but the UI must say so plainly: handing off to Picard means files will
+  be modified by a tool that is not bound by Anthem's read-only setting.
+- **`audio_hash` is unaffected**, because it excludes metadata regions (§3.5). This is where that
+  decision pays off: a Picard retag changes `mtime` and `filesize` but not the audio, so the rescan
+  matches the existing media by hash, and **ratings and play history survive tagging**. A
+  path-keyed design would have coped too, but a design keyed on whole-file digests would have
+  orphaned every retagged file.
+- If Picard *renames or moves* files, which it does by default when configured to, the rescan sees
+  a disappearance plus an arrival with a matching hash — already handled as a move (§9.1).
+
+**3. Read MusicBrainz identifiers directly (later).** Once files carry `musicbrainz_recordingid`,
+the duplicate finder promotes those tracks to `certain` confidence (§9.2) and identity resolution
+gains its strongest signal (§3.5.0). The scanner already reads the tag; nothing more is needed.
+
+#### 7.1.1.2 What Anthem should *not* do
+
+- **Not embed Picard**, and not reimplement AcoustID lookup (§3.5 explains why AcoustID is a hint,
+  not a key).
+- **Not sync back to MusicBrainz.** Submitting edits is Picard's job and carries community
+  responsibilities Anthem should not take on.
+- **Not fight Picard over file layout.** If a user lets Picard rename files, Anthem follows via move
+  detection rather than trying to own the naming.
+
+#### 7.1.1.3 What is needed
+
+1. A `picard` setting: binary path, plus whether to rescan the affected paths on return.
+2. A "Tag with Picard" action on a track selection and on an album.
+3. A targeted rescan — `scanRoots` already takes a root list, so scanning specific paths is a small
+   generalization.
+4. A clear warning in the hand-off dialog that Picard writes to files regardless of read-only mode.
 
 ### 7.2 Mass tagging
 
@@ -941,17 +1065,43 @@ Original design notes, still applicable:
 - Missing files are flagged, not deleted; a "missing tracks" view offers relocate/forget.
 - Network mounts: a per-root "slow" flag that disables hashing and watching, using mtime only.
 
-### 9.2 Deduplication
+### 9.2 Deduplication — implemented
 
-Find duplicates by any of: `mb_recording_id`, content hash, or fuzzy (normalized artist+title+length
-within a tolerance). Present as groups with a rule-based keeper selection (highest bitrate, preferred
-format, oldest added, in-preferred-folder) and a reviewed batch action.
+`src/main/library/duplicates.ts`. Proposes groups; never changes anything. Four strategies, each
+carrying its own confidence and a sentence explaining itself, because a proposal the user cannot
+evaluate is worse than none:
 
-### 9.4 Merging tracks by hand — specified, not built
+| Reason | Confidence | Basis |
+|---|---|---|
+| `audio_hash` | certain | Byte-identical audio content |
+| `mb_recording_id` | certain | Same MusicBrainz recording |
+| `tags` | likely | Same `identity_key`: artist, title and album, normalized |
+| `fuzzy` | possible | Same artist and title, ignoring album, with durations within a tolerance |
+
+Details that matter, all pinned by tests:
+
+- **A track appears in one proposal at a time**, strongest evidence first, so the user is never
+  asked about the same track twice in one pass.
+- **Fuzzy matching splits a bucket by duration** (default tolerance 3 s, configurable), so a cover
+  and the original do not merge on title alone.
+- Normalization strips diacritics and `(feat. …)` suffixes, so *Café* by *Björk* groups with *Cafe*
+  by *Bjork*.
+- A group spanning different albums says so in its explanation, because that is the case most
+  likely to be a genuine second recording rather than a duplicate.
+
+Still to do: rule-based keeper pre-selection (highest bitrate, preferred format, oldest added), and
+a batch mode for the `certain` groups.
+
+### 9.4 Merging tracks by hand — implemented
 
 §3.5.0 deliberately refuses to guess that two different files are the same recording. That leaves a
 gap the user has to be able to close: **select several tracks and merge them into one, choosing
 which value to keep wherever they disagree.**
+
+`src/main/library/merge.ts`, with `mergePreview`, `mergeTracks` and `unmerge`. Multi-select in the
+song list, a merge dialog rendering the preview, and 20 tests including a full round-trip assertion
+that unmerge restores tracks, media, statistics, history, sets, extras and playlist positions
+exactly.
 
 The reference is Thunderbird CardBook's duplicate merge: rather than picking a winning *record*, it
 shows the conflicting *fields* side by side and lets the user resolve each one. That is the right
@@ -1004,18 +1154,24 @@ existing `tag_writes`-style journal (or a sibling `merge_journal`) under one bat
 `unmerge(batchId)` restores it. **This is a prerequisite, not a follow-up** — shipping merge without
 undo would be shipping a way to quietly lose ratings and history.
 
-#### 9.4.4 What is needed to build it
+#### 9.4.4 Decisions taken while building it
 
-1. `src/main/library/merge.ts` — `mergePreview(db, ids)` and `mergeTracks(db, req)`, transactional,
-   with the field-resolution rules above.
-2. A `merge_journal` table plus `unmerge(batchId)`.
-3. IPC: `tracks:mergePreview`, `tracks:merge`, `tracks:unmerge`.
-4. Multi-select in the song list — `shared/view.ts` already has the `Selection` model, so this is
-   wiring, not new logic.
-5. A merge dialog rendering the preview: one row per field, radio per option, union toggle for
-   multi-value fields, and a media list showing what the survivor ends up holding.
-6. Tests: media all move, counts sum, ratings take the max, playlists repoint without duplicating,
-   pinned survivor, and a full round-trip through `unmerge`.
+- **The default survivor is the richest source** — most media, then most plays, then oldest added.
+  A user may pick another, but the default should rarely need changing.
+- **Union is the default for multi-value fields.** Keeping every genre is nearly always what was
+  meant; taking one source's set is available but is the unusual choice.
+- **Play history unions and deduplicates** via the migration-002 constraint. Events dropped as exact
+  duplicates are recorded in the journal, so unmerge restores them rather than losing them
+  permanently to a merge-and-undo cycle.
+- **Repointing playlists can list the survivor twice** in one playlist; the merge keeps its earliest
+  position and drops the rest.
+- **Album is an entity, not a string**, so resolving the album field carries the chosen source's
+  `album_id` rather than copying its name.
+- **The survivor is pinned** (`pinned = 1`, `identity_source = 'manual'`), so no automated pass
+  re-splits what a person joined.
+
+Still to do: a merge-history view listing past merges with an undo control for each. `unmerge` works
+and is tested, but is currently only reachable immediately after merging.
 
 #### 9.4.5 Where it connects
 
@@ -1223,6 +1379,11 @@ search bar parser, filter panes, filter stack chips.
 **M3 — Playback (2 wk).** mpv backend, queue vs playlist, gapless, ReplayGain apply, seekbar and
 transport widgets, MPRIS. Milestone: usable as a daily player.
 
+**M3.5 — Song properties (next).** The view described in §6.5: identity and how it was decided,
+every media source with its location and technical detail, raw per-source tags side by side where
+they disagree, statistics, and merge provenance. Read-only, so it carries none of the tag editor's
+risk, and it is what makes the entity model legible.
+
 **M4 — Ratings and stats (1 wk).** Rating widget, play/skip history recording, stats fields
 filterable and sortable, optional tag write-back.
 
@@ -1230,7 +1391,11 @@ filterable and sortable, optional tag write-back.
 weighted random, auto-fill, playlist import/export.
 
 **M6 — Tag editing (3 wk).** Single and mass edit, dry-run diffs, write journal and undo, tags↔
-filename, artwork management, album operations.
+filename, artwork management, album operations. Includes the Picard hand-off (§7.1.1), which is
+small and should land first — it covers authoritative tagging without Anthem writing anything.
+
+Also here: the field editor and column picker that make §3.2.1's promise true for user-defined
+fields.
 
 **M7 — Layout system (3 wk).** Layout documents, widget manifests, drag-to-rearrange, layout
 inspector, hot reload, `extends` + patches, shipped alternate layouts.
@@ -1238,7 +1403,7 @@ inspector, hot reload, `extends` + patches, shipped alternate layouts.
 **M8 — Theming and polish (2 wk).** Theme loader, theme editor, density modes, keybinding editor,
 accessibility pass (keyboard-complete, focus visible, screen reader labels), tray/notifications.
 
-**M9 — Migration and 1.0 (2 wk).** gmusicbrowser importer, iTunes/Rhythmbox import, dedupe UI,
+**M9 — Migration and 1.0 (2 wk).** iTunes/Rhythmbox import, merge history view,
 `anthemctl`, packaging (AppImage, Flatpak, `.deb`, Nix flake, MSI, `.dmg`), documentation.
 
 Post-1.0: plugin system, remote web UI, replay-gain scanner UI, lyrics/artist-info providers,

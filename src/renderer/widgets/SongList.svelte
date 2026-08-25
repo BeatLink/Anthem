@@ -2,6 +2,9 @@
   import { library } from '../stores/library.svelte'
   import { field } from '@shared/fields'
   import Stars from './Stars.svelte'
+  import MergeDialog from './MergeDialog.svelte'
+
+  let merging = $state<number[] | null>(null)
 
   // Column set is data, so the header context menu can edit it without touching this component.
   let columns = $state(['track_number', 'title', 'artist', 'album', 'year', 'length', 'rating', 'play_count'])
@@ -52,6 +55,16 @@
     {#if library.hasFilters()}
       <button class="clear" onclick={() => library.clearFilters()}>Clear all</button>
     {/if}
+    {#if library.selectedCount() > 0}
+      <button class="clear" onclick={() => library.clearSelection()}>
+        {library.selectedCount()} selected ✕
+      </button>
+    {/if}
+    {#if library.selectedCount() > 1}
+      <button class="merge" onclick={() => (merging = library.selectedIds())}>
+        Merge {library.selectedCount()}…
+      </button>
+    {/if}
     <span class="spacer"></span>
     <span class="hint" title="Click a column header to sort. Shift+click another to sort by it next.">
       shift+click to multi-sort
@@ -72,8 +85,20 @@
   </div>
 
   <div class="body">
-    {#each library.tracks as t (t.id)}
-      <div class="row" style:grid-template-columns={template}>
+    {#each library.tracks as t, i (t.id)}
+      <div
+        class="row"
+        class:sel={library.isSelected(t.id)}
+        style:grid-template-columns={template}
+        role="row"
+        tabindex="0"
+        onclick={(e) => library.clickRow(i, { shift: e.shiftKey, ctrl: e.ctrlKey || e.metaKey })}
+        onkeydown={(e) => {
+          if (e.key !== 'Enter' && e.key !== ' ') return
+          e.preventDefault()
+          library.clickRow(i, { shift: e.shiftKey, ctrl: e.ctrlKey || e.metaKey })
+        }}
+      >
         <div class="cell num">{t.track_number ?? ''}</div>
         <div class="cell">{t.title ?? ''}</div>
         <div class="cell">{t.artist ?? ''}</div>
@@ -93,6 +118,16 @@
     {/each}
   </div>
 </section>
+
+{#if merging}
+  <MergeDialog
+    ids={merging}
+    onclose={(merged) => {
+      merging = null
+      if (merged) library.clearSelection()
+    }}
+  />
+{/if}
 
 <style>
   .songlist {
@@ -150,6 +185,18 @@
 
   .clear:hover { color: var(--text-body); border-color: var(--border-focus); }
 
+  .merge {
+    flex: 0 0 auto;
+    height: var(--control-height-sm);
+    padding: 0 var(--space-3);
+    font-size: var(--font-size-sm);
+    color: var(--text-on-fill);
+    background: var(--accent);
+    border: 0;
+    border-radius: var(--radius-full);
+    cursor: pointer;
+  }
+
   .count { font-size: var(--font-size-sm); color: var(--text-tertiary); }
   .hint { font-size: var(--font-size-sm); color: var(--text-tertiary); opacity: 0.75; }
   .spacer { flex: 1; }
@@ -187,6 +234,8 @@
   }
 
   .row:hover { background: var(--row-hover); }
+  .row.sel { background: var(--row-selected); }
+  .row { cursor: default; user-select: none; }
 
   .cell {
     padding: 0 var(--space-3);

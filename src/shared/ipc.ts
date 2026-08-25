@@ -107,6 +107,76 @@ export interface ScanReport {
   durationMs: number
 }
 
+export type Resolution = { kind: 'value'; from: number } | { kind: 'union' }
+
+export interface FieldOption { from: number; value: string | number | null | string[] }
+
+export interface PreviewField {
+  field: string
+  name: string
+  multi: boolean
+  conflict: boolean
+  value?: string | number | null | string[]
+  options?: FieldOption[]
+  union?: string[]
+}
+
+export interface PreviewMedia {
+  id: number
+  from: number
+  uri: string
+  codec: string | null
+  bitrate: number | null
+  present: boolean
+}
+
+export interface MergePreview {
+  ids: number[]
+  survivor: number
+  fields: PreviewField[]
+  media: PreviewMedia[]
+  statistics: {
+    playCount: number
+    skipCount: number
+    rating: number | null
+    firstPlayed: number | null
+    lastPlayed: number | null
+  }
+  pinnedSources: number[]
+}
+
+export interface MergeResult {
+  batchId: string
+  survivor: number
+  absorbed: number[]
+  mediaMoved: number
+  historyMoved: number
+  playlistEntriesRepointed: number
+}
+
+export type DuplicateReason = 'audio_hash' | 'mb_recording_id' | 'tags' | 'fuzzy'
+
+export interface DuplicateMember {
+  trackId: number
+  title: string | null
+  artist: string | null
+  album: string | null
+  year: number | null
+  lengthMs: number | null
+  rating: number | null
+  playCount: number
+  mediaCount: number
+  codecs: string
+}
+
+export interface DuplicateGroup {
+  key: string
+  reason: DuplicateReason
+  confidence: 'certain' | 'likely' | 'possible'
+  explanation: string
+  members: DuplicateMember[]
+}
+
 export interface AppInfo {
   version: string
   electron: string
@@ -135,6 +205,18 @@ export interface AnthemApi {
   'library:removeRoot': (id: number) => { removed: boolean }
   'library:scan': () => ScanReport
   'library:scanCancel': () => { cancelled: boolean }
+  'tracks:mergePreview': (ids: number[]) => MergePreview
+  'tracks:merge': (req: {
+    ids: number[]
+    survivor: number
+    resolutions?: Record<string, Resolution>
+  }) => MergeResult
+  'tracks:unmerge': (batchId: string) => { batchId: string; restored: number[]; survivor: number }
+  'tracks:duplicates': (opts?: {
+    reasons?: DuplicateReason[]
+    lengthToleranceMs?: number
+    limit?: number
+  }) => DuplicateGroup[]
 }
 
 /** Pushed from the main process; the renderer subscribes rather than polling. */
@@ -156,5 +238,6 @@ export const CHANNELS: readonly Channel[] = [
   'app:info', 'app:safety', 'library:stats', 'library:query', 'library:groupBy',
   'library:explain', 'library:reset', 'fields:list', 'theme:list',
   'import:gmbDefaultPath', 'import:gmbBrowse', 'import:gmbPreview', 'import:gmbRun',
-  'library:roots', 'library:addRoot', 'library:removeRoot', 'library:scan', 'library:scanCancel'
+  'library:roots', 'library:addRoot', 'library:removeRoot', 'library:scan', 'library:scanCancel',
+  'tracks:mergePreview', 'tracks:merge', 'tracks:unmerge', 'tracks:duplicates'
 ]

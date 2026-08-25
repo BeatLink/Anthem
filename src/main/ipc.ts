@@ -10,6 +10,8 @@ import { safetyStatus } from './safety'
 import { defaultGmbrcPath, parseGmbrc } from './import/gmbrc'
 import { importGmbrc } from './import/gmb-import'
 import { scanRoots } from './library/scan'
+import { mergePreview, mergeTracks, unmerge } from './library/merge'
+import { findDuplicates } from './library/duplicates'
 import {
   EVENT_CHANNEL, type AnthemEvents, type EventName, type FileResult, type Root
 } from '@shared/ipc'
@@ -184,6 +186,14 @@ export function registerIpc(db: DB): void {
       }
       return run as never
     })(),
+
+    'tracks:mergePreview': (ids) => mergePreview(db as never, ids) as never,
+
+    'tracks:merge': (req) => mergeTracks(db as never, req) as never,
+
+    'tracks:unmerge': (batchId) => unmerge(db as never, batchId),
+
+    'tracks:duplicates': (opts) => findDuplicates(db as never, opts ?? {}) as never,
 
     'library:reset': () => {
       db.exec(`DELETE FROM playlist_tracks; DELETE FROM playlists; DELETE FROM play_history;

@@ -27,7 +27,10 @@ implemented yet. See the roadmap in DESIGN-SPEC §15.
 | Playback (mpv) | not started |
 | Tag writing | not started (read-only by default) |
 | Filesystem watching | not started |
-| Merge duplicate tracks | specified, not built (DESIGN-SPEC §9.4) |
+| Merge tracks, with per-field resolution and undo | working |
+| Duplicate detection (hash, MBID, tags, fuzzy) | working |
+| Song properties panel | next (DESIGN-SPEC §6.5) |
+| Picard hand-off for tagging | specified (DESIGN-SPEC §7.1.1) |
 
 ## The one idea worth knowing
 

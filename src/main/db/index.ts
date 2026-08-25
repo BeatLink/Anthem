@@ -8,12 +8,14 @@ import { app } from 'electron'
 
 import initial from './migrations/001-initial.sql?raw'
 import historyUnique from './migrations/002-history-unique.sql?raw'
+import mergeJournal from './migrations/003-merge-journal.sql?raw'
 
 export type DB = Database.Database
 
 const MIGRATIONS: readonly { version: number; sql: string }[] = [
   { version: 1, sql: initial },
-  { version: 2, sql: historyUnique }
+  { version: 2, sql: historyUnique },
+  { version: 3, sql: mergeJournal }
 ]
 
 export function libraryPath(): string {

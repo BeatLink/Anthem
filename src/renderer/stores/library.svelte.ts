@@ -6,7 +6,7 @@
 
 import type { FilterNode } from '@shared/filter'
 import { leaf } from '@shared/filter'
-import { FilterStack, SortState } from '@shared/view'
+import { FilterStack, Selection, SortState } from '@shared/view'
 import type { GroupRow, LibraryStats, TrackRow } from '@shared/ipc'
 import { field } from '@shared/fields'
 
@@ -25,6 +25,10 @@ class LibraryStore {
   private readonly stack = new FilterStack()
   private readonly sort = new SortState()
   private readonly paneValues = new Map<string, string>()
+  private readonly selection = new Selection()
+
+  /** Bumped on selection changes, for the same reason `version` exists. */
+  selectionVersion = $state(0)
 
   constructor() {
     this.sort.set([{ field: 'album' }, { field: 'disc_number' }, { field: 'track_number' }])
@@ -61,6 +65,39 @@ class LibraryStore {
     await this.refresh()
   }
 
+  // ── selection ──────────────────────────────────────────────────────────
+  isSelected(id: number): boolean {
+    void this.selectionVersion
+    return this.selection.has(id)
+  }
+
+  selectedIds(): number[] {
+    void this.selectionVersion
+    return this.selection.ids()
+  }
+
+  selectedCount(): number {
+    void this.selectionVersion
+    return this.selection.size
+  }
+
+  clickRow(index: number, modifiers: { shift?: boolean; ctrl?: boolean }): void {
+    const ordered = this.tracks.map((t) => t.id)
+    const intent = modifiers.shift ? 'range' : modifiers.ctrl ? 'toggle' : 'replace'
+    this.selection.apply(ordered, index, intent)
+    this.selectionVersion++
+  }
+
+  selectAll(): void {
+    this.selection.selectAll(this.tracks.map((t) => t.id))
+    this.selectionVersion++
+  }
+
+  clearSelection(): void {
+    this.selection.clear()
+    this.selectionVersion++
+  }
+
   async refresh(): Promise<void> {
     try {
       this.error = null
@@ -69,6 +106,10 @@ class LibraryStore {
       const req = { filter: this.filter(), sort: [...this.sort.list()], limit: { count: PAGE } }
       this.tracks = await window.anthem['library:query'](req)
       this.lastSql = (await window.anthem['library:explain'](req)).sql
+
+      // A narrowed result set must not leave selections pointing at rows nobody can see.
+      this.selection.retain(this.tracks.map((t) => t.id))
+      this.selectionVersion++
       this.version++
     } catch (err) {
       this.error = (err as Error).message

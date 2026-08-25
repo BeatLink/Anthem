@@ -4,6 +4,7 @@
   import { library } from '../../stores/library.svelte'
   import GmbImport from './GmbImport.svelte'
   import ScanPanel from './ScanPanel.svelte'
+  import DuplicatesPanel from './DuplicatesPanel.svelte'
 
   let {
     info = null,
@@ -19,7 +20,7 @@
     safety?: SafetyStatus | null
     theme?: 'light' | 'dark' | 'system'
     density?: 'compact' | 'normal' | 'comfortable'
-    initialSection?: 'library' | 'folders' | 'import' | 'appearance' | 'about'
+    initialSection?: 'library' | 'folders' | 'import' | 'duplicates' | 'appearance' | 'about'
     onclose?: () => void
     onTheme?: (t: 'light' | 'dark' | 'system') => void
     onDensity?: (d: 'compact' | 'normal' | 'comfortable') => void
@@ -29,6 +30,7 @@
     { id: 'library', label: 'Library' },
     { id: 'folders', label: 'Folders' },
     { id: 'import', label: 'Import' },
+    { id: 'duplicates', label: 'Duplicates' },
     { id: 'appearance', label: 'Appearance' },
     { id: 'about', label: 'About' }
   ] as const
@@ -137,6 +139,9 @@
 
     {:else if section === 'import'}
       <GmbImport ondone={onclose} />
+
+    {:else if section === 'duplicates'}
+      <DuplicatesPanel />
 
     {:else if section === 'appearance'}
       <section>
