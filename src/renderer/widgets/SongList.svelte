@@ -12,6 +12,15 @@
 
   const template = $derived(columns.map(width).join(' '))
 
+  const hint = (id: string): string => {
+    const dir = library.sortDir(id)
+    const p = library.sortPriority(id)
+    const state = dir === null
+      ? 'Not sorted'
+      : `Sorted ${dir === 'asc' ? 'ascending' : 'descending'}${p > 1 ? `, key ${p}` : ''}`
+    return `${heading(id)} — ${state}\nClick to sort by this column\nShift+click to add it as an extra sort key`
+  }
+
   const arrow = (id: string): string => {
     const dir = library.sortDir(id)
     if (!dir) return ''
@@ -44,6 +53,9 @@
       <button class="clear" onclick={() => library.clearFilters()}>Clear all</button>
     {/if}
     <span class="spacer"></span>
+    <span class="hint" title="Click a column header to sort. Shift+click another to sort by it next.">
+      shift+click to multi-sort
+    </span>
     <span class="count">{library.tracks.length.toLocaleString()} shown</span>
   </div>
 
@@ -51,7 +63,9 @@
     {#each columns as c (c)}
       <button
         class="cell head-cell"
+        class:sorted={library.sortDir(c) !== null}
         style:text-align={align(c)}
+        title={hint(c)}
         onclick={(e) => library.toggleSort(c, e.shiftKey)}
       >{heading(c)} <span class="arrow">{arrow(c)}</span></button>
     {/each}
@@ -137,8 +151,9 @@
   .clear:hover { color: var(--text-body); border-color: var(--border-focus); }
 
   .count { font-size: var(--font-size-sm); color: var(--text-tertiary); }
+  .hint { font-size: var(--font-size-sm); color: var(--text-tertiary); opacity: 0.75; }
   .spacer { flex: 1; }
-  .arrow { color: var(--accent); font-size: 9px; }
+  .arrow { color: var(--accent); font-size: 9px; font-variant-numeric: tabular-nums; }
 
   .head {
     display: grid;
@@ -161,6 +176,7 @@
   }
 
   .head-cell:hover { background: var(--surface-navigation-hover); color: var(--text-body); }
+  .head-cell.sorted { color: var(--text-heading); }
 
   .body { overflow-y: auto; }
 
