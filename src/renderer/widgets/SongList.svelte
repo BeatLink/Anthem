@@ -6,6 +6,10 @@
   import { player } from '../stores/player.svelte'
   import SongProperties from './SongProperties.svelte'
   import ContextMenu, { type MenuItem } from '../lib/ContextMenu.svelte'
+  import { pref } from '../lib/prefs.svelte'
+  import { logger } from '../lib/log'
+
+  const log = logger('songlist')
 
   let merging = $state<number[] | null>(null)
   let inspecting = $state<number | null>(null)
@@ -38,6 +42,12 @@
     }
   }
 
+  function selectRow(index: number, e: MouseEvent | KeyboardEvent): void {
+    const modifiers = { shift: e.shiftKey, ctrl: e.ctrlKey || e.metaKey }
+    library.clickRow(index, modifiers)
+    log.debug('row clicked', { index, ...modifiers, selected: library.selectedCount() })
+  }
+
   /** Playing from the list makes the whole visible list the context, as every player does. */
   function playFrom(index: number): void {
     const t = library.tracks[index]
@@ -48,11 +58,64 @@
   // Column set is data, so the header context menu can edit it without touching this component.
   let columns = $state(['track_number', 'title', 'artist', 'album', 'year', 'length', 'rating', 'play_count'])
 
+  const DEFAULT_WIDTHS: Record<string, number> = {
+    track_number: 56, title: 320, artist: 220, album: 220,
+    year: 60, length: 70, rating: 96, play_count: 60
+  }
+
+  const MIN_WIDTH = 44
+
+  // Widths are remembered per column id, so adding or reordering columns keeps the rest intact.
+  const widths = pref<Record<string, number>>('songlist.widths', {})
+
+  const widthOf = (id: string): number =>
+    widths.value[id] ?? DEFAULT_WIDTHS[id] ?? 120
+
+  /** The last column takes the remaining space, so the row always fills the viewport. */
+  const template = $derived(
+    columns.map((c, i) => (i === columns.length - 1 ? '1fr' : `${widthOf(c)}px`)).join(' ')
+  )
+
+  let dragging = $state<string | null>(null)
+
+  function startResize(id: string, event: PointerEvent): void {
+    event.preventDefault()
+    event.stopPropagation()
+
+    const handle = event.currentTarget as HTMLElement
+    handle.setPointerCapture(event.pointerId)
+
+    const originX = event.clientX
+    const originWidth = widthOf(id)
+    dragging = id
+
+    const move = (e: PointerEvent): void => {
+      const next = Math.max(MIN_WIDTH, Math.round(originWidth + (e.clientX - originX)))
+      widths.value = { ...widths.value, [id]: next }
+    }
+
+    const done = (): void => {
+      dragging = null
+      handle.releasePointerCapture(event.pointerId)
+      handle.removeEventListener('pointermove', move)
+      handle.removeEventListener('pointerup', done)
+      handle.removeEventListener('pointercancel', done)
+    }
+
+    handle.addEventListener('pointermove', move)
+    handle.addEventListener('pointerup', done)
+    handle.addEventListener('pointercancel', done)
+  }
+
+  /** Double-clicking a divider restores that column's default. */
+  function resetWidth(id: string): void {
+    const next = { ...widths.value }
+    delete next[id]
+    widths.value = next
+  }
+
   const heading = (id: string): string => field(id).name
   const align = (id: string): string => field(id).align ?? 'left'
-  const width = (id: string): string => (id === 'title' || id === 'album' || id === 'artist' ? '1fr' : `${field(id).width ?? 80}px`)
-
-  const template = $derived(columns.map(width).join(' '))
 
   const hint = (id: string): string => {
     const dir = library.sortDir(id)
@@ -117,14 +180,40 @@
   </div>
 
   <div class="head" style:grid-template-columns={template}>
-    {#each columns as c (c)}
-      <button
-        class="cell head-cell"
-        class:sorted={library.sortDir(c) !== null}
-        style:text-align={align(c)}
-        title={hint(c)}
-        onclick={(e) => library.toggleSort(c, e.shiftKey)}
-      >{heading(c)} <span class="arrow">{arrow(c)}</span></button>
+    {#each columns as c, i (c)}
+      <div class="head-slot">
+        <button
+          class="cell head-cell"
+          class:sorted={library.sortDir(c) !== null}
+          style:text-align={align(c)}
+          title={hint(c)}
+          onclick={(e) => library.toggleSort(c, e.shiftKey)}
+        >{heading(c)} <span class="arrow">{arrow(c)}</span></button>
+
+        {#if i < columns.length - 1}
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+          <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+          <div
+            class="grip"
+            class:active={dragging === c}
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize {heading(c)} column"
+            tabindex="0"
+            onpointerdown={(e) => startResize(c, e)}
+            ondblclick={() => resetWidth(c)}
+            onkeydown={(e) => {
+              if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+              e.preventDefault()
+              const step = e.shiftKey ? 32 : 8
+              widths.value = {
+                ...widths.value,
+                [c]: Math.max(MIN_WIDTH, widthOf(c) + (e.key === 'ArrowRight' ? step : -step))
+              }
+            }}
+          ></div>
+        {/if}
+      </div>
     {/each}
   </div>
 
@@ -137,7 +226,7 @@
         style:grid-template-columns={template}
         role="row"
         tabindex="0"
-        onclick={(e) => library.clickRow(i, { shift: e.shiftKey, ctrl: e.ctrlKey || e.metaKey })}
+        onclick={(e) => selectRow(i, e)}
         ondblclick={() => playFrom(i)}
         oncontextmenu={(e) => openMenu(e, i)}
         onkeydown={(e) => {
@@ -145,7 +234,7 @@
           if (e.key === 'Enter') { e.preventDefault(); playFrom(i); return }
           if (e.key !== ' ') return
           e.preventDefault()
-          library.clickRow(i, { shift: e.shiftKey, ctrl: e.ctrlKey || e.metaKey })
+          selectRow(i, e)
         }}
       >
         <div class="cell num">{t.track_number ?? ''}</div>
@@ -265,6 +354,31 @@
     background: var(--column-header);
     border-bottom: 1px solid var(--column-separator);
   }
+
+  .head-slot { position: relative; display: grid; min-width: 0; }
+
+  .grip {
+    position: absolute;
+    top: 0;
+    right: -3px;
+    z-index: 1;
+    width: 7px;
+    height: 100%;
+    cursor: col-resize;
+  }
+
+  .grip::after {
+    content: '';
+    position: absolute;
+    inset-block: 0;
+    left: 3px;
+    width: 1px;
+    background: transparent;
+    transition: background var(--transition-fast);
+  }
+
+  .grip:hover::after, .grip:focus-visible::after, .grip.active::after { background: var(--accent); }
+  .grip:focus-visible { outline: none; }
 
   .head-cell {
     height: 100%;

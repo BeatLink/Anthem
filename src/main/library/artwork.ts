@@ -116,9 +116,20 @@ export async function readEmbedded(mediaPath: string): Promise<{ data: Buffer; m
   }
 }
 
+/** Sizes generated on demand. A request is served by the smallest one that is large enough. */
+export const THUMBNAIL_SIZES = [64, 128, 256, 512] as const
+export type ThumbnailSize = (typeof THUMBNAIL_SIZES)[number]
+
+/** Resizes an encoded image, returning encoded bytes. Injected so this module stays testable. */
+export type Resizer = (data: Buffer, size: number) => Buffer | null
+
 export interface ArtworkOptions {
   cacheDir: string
+  resize?: Resizer
 }
+
+export const sizeFor = (requested: number): ThumbnailSize =>
+  THUMBNAIL_SIZES.find((s) => s >= requested) ?? THUMBNAIL_SIZES[THUMBNAIL_SIZES.length - 1]!
 
 const cacheFile = (cacheDir: string, hash: string, ext: string): string =>
   join(cacheDir, hash.slice(0, 2), `${hash}${ext}`)
@@ -135,6 +146,43 @@ function store(cacheDir: string, data: Buffer, mime: string | undefined): {
   }
 
   return { path, hash, size: imageSize(data) }
+}
+
+const thumbPath = (cacheDir: string, hash: string, size: number): string =>
+  join(cacheDir, 'thumbs', hash.slice(0, 2), `${hash}-${size}.png`)
+
+/**
+ * A cached thumbnail at the given size, generated on first request.
+ *
+ * Returns the original when the source is already no larger than what was asked for, because
+ * upscaling a small cover wastes space and looks worse than letting the layout scale it.
+ */
+export function thumbnail(
+  opts: ArtworkOptions,
+  art: Artwork,
+  requested: number
+): string | null {
+  if (!art.path || !art.hash) return null
+
+  const size = sizeFor(requested)
+  const longest = Math.max(art.width ?? 0, art.height ?? 0)
+  if (longest > 0 && longest <= size) return art.path
+
+  const target = thumbPath(opts.cacheDir, art.hash, size)
+  if (existsSync(target)) return target
+  if (!opts.resize) return art.path
+
+  try {
+    const resized = opts.resize(readFileSync(art.path), size)
+    if (!resized) return art.path
+
+    mkdirSync(dirname(target), { recursive: true })
+    writeFileSync(target, resized)
+    return target
+  } catch {
+    // A thumbnail that cannot be made is not worth failing over; serve the original.
+    return art.path
+  }
 }
 
 interface Row {

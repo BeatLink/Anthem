@@ -13,8 +13,8 @@ import { scanRoots } from './library/scan'
 import { mergePreview, mergeTracks, unmerge } from './library/merge'
 import { findDuplicates } from './library/duplicates'
 import { trackDetails } from './library/details'
-import { forgetMisses, resolveArtwork } from './library/artwork'
-import { artCacheDir } from './artcache'
+import { forgetMisses, resolveArtwork, thumbnail } from './library/artwork'
+import { artCacheDir, resizeImage } from './artcache'
 import { logFromRenderer, logger } from './log'
 import { Player } from './play/player'
 import { MpvEngine, findMpv } from './play/mpv'
@@ -223,10 +223,13 @@ export function registerIpc(db: DB): void {
 
     'tracks:details': (trackId) => trackDetails(db as never, trackId) as never,
 
-    'art:forTrack': (async (trackId: number) => {
-      const art = await resolveArtwork(db as never, trackId, { cacheDir: artCacheDir() })
+    'art:forTrack': (async (req: { trackId: number; size?: number }) => {
+      const options = { cacheDir: artCacheDir(), resize: resizeImage }
+      const art = await resolveArtwork(db as never, req.trackId, options)
+      const path = req.size ? thumbnail(options, art, req.size) : art.path
+
       return {
-        url: art.path ? `anthem-art://local${encodeURI(art.path)}` : null,
+        url: path ? `anthem-art://local${encodeURI(path)}` : null,
         source: art.source
       }
     }) as never,

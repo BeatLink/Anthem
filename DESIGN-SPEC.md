@@ -1064,8 +1064,13 @@ cannot load `file://`, so cached art is served over `anthem-art://`, registered 
 scheme and restricted to paths inside the cache directory — a url pointing anywhere else is refused
 rather than read.
 
-Still to do: thumbnail sizes (currently the original is served at whatever size it was found),
-artist images, and the remote fetch.
+**Thumbnails** are generated on demand at 64, 128, 256 and 512 px, and a request is served by the
+smallest size that is large enough. An image already no bigger than what was asked for is served as
+it is, because upscaling a small cover wastes space and looks worse than letting the layout scale
+it. Resizing goes through Electron's own image support rather than adding a native image library,
+and `artwork.ts` takes the resizer as an argument so it stays testable without Electron.
+
+Still to do: artist images, and the remote fetch.
 
 **Measured on a real 5,079-track library:** 5 of a 25-track sample carried embedded art. That
 library is organised into folders by rating rather than by album, so the folder-image fallback finds
@@ -1099,8 +1104,12 @@ Decisions worth recording:
   and `playTrack()` recorded one. Play, skip, or neither — never two.
 - **Seeking backwards cannot fake a second play**: the threshold is measured against the furthest
   point reached, not the current position.
-- **The best source wins**: present files before missing ones, then `quality_rank`. A track whose
-  files have all disappeared reports that plainly instead of failing at load.
+- **The best source that is actually there wins.** Existence is checked rather than trusted: a
+  library imported from elsewhere is full of rows whose files have since moved or gone, and handing
+  one to the engine produces "loading failed", which tells the listener nothing. The player skips
+  absent sources, marks them absent as it goes — so the library corrects itself as it is used — and
+  distinguishes *"the file for this track is missing"* from *"this track has no file"*, because the
+  fix differs. On the test library this mattered for **2,465 of 5,079 tracks**.
 - **Repeat one ends where it began, but a manual skip still moves on.** Repeating a track forever
   because the listener pressed Next would be obtuse.
 - **Previous restarts the track first** if more than three seconds in, as every other player does.

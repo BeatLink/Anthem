@@ -22,7 +22,7 @@
     let cancelled = false
     loading = true
 
-    void ipc('art:forTrack', id)
+    void ipc('art:forTrack', { trackId: id, size })
       .then((art) => {
         // A slower earlier request must not overwrite a newer track's cover.
         if (!cancelled) url = art.url

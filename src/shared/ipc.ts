@@ -304,7 +304,8 @@ export interface AnthemApi {
   'app:logConfig': () => { spec: string | undefined }
   'tracks:details': (trackId: number) => TrackDetails | null
   /** Resolves cover art lazily; returns an anthem-art:// url, or null when there is none. */
-  'art:forTrack': (trackId: number) => { url: string | null; source: string }
+  'art:forTrack': (req: { trackId: number; size?: number }) =>
+    { url: string | null; source: string }
   'art:rescan': () => { forgotten: number }
   'tracks:reveal': (uri: string) => { revealed: boolean }
   'player:status': () => PlayerStatus

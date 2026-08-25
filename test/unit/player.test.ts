@@ -4,6 +4,9 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest'
 import { NullEngine } from '@main/play/engine'
 import { Player, countsAsPlay, shuffleOrder } from '@main/play/player'
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { freshDb, type TestDb } from '../helpers/sqlite'
 
 let db: TestDb
@@ -12,6 +15,9 @@ let player: Player
 
 const lastId = (): number =>
   (db.prepare('SELECT last_insert_rowid() AS id').get() as { id: number }).id
+
+/** Files must really exist now that the player checks, so the default one is created. */
+let scratch: string
 
 function makeTrack(o: {
   title?: string; lengthMs?: number | null; files?: { uri: string; present?: boolean; rank?: number }[]
@@ -22,7 +28,9 @@ function makeTrack(o: {
     .run(o.title ?? 'Song', o.lengthMs === undefined ? 200_000 : o.lengthMs, o.trackGain ?? null)
   const id = lastId()
 
-  for (const f of o.files ?? [{ uri: `/music/${id}.flac` }]) {
+  const files = o.files ?? [{ uri: join(scratch, `${id}.flac`) }]
+  for (const f of files) {
+    if (f.uri.startsWith(scratch)) writeFileSync(f.uri, Buffer.alloc(16))
     db.prepare(`INSERT INTO media (track_id, kind, uri, present, quality_rank, added)
                 VALUES (?, 'file', ?, ?, ?, 0)`)
       .run(id, f.uri, f.present === false ? 0 : 1, f.rank ?? 0)
@@ -35,6 +43,7 @@ const stat = (id: number): { play_count: number; skip_count: number; last_played
     .get(id) as never
 
 beforeEach(() => {
+  scratch = mkdtempSync(join(tmpdir(), 'anthem-tracks-'))
   db = freshDb()
   engine = new NullEngine()
   player = new Player(db as never, engine)
@@ -43,6 +52,7 @@ beforeEach(() => {
 afterEach(async () => {
   await player.dispose()
   db.close()
+  rmSync(scratch, { recursive: true, force: true })
 })
 
 describe('play thresholds', () => {
@@ -65,27 +75,72 @@ describe('playing a track', () => {
     const id = makeTrack({ title: 'So What' })
     await player.playTrack(id)
 
-    expect(engine.loaded).toEqual([`/music/${id}.flac`])
+    expect(engine.loaded).toEqual([join(scratch, `${id}.flac`)])
     expect(player.status().state).toBe('playing')
     expect(player.status().track?.title).toBe('So What')
   })
 
-  it('prefers a present file over a missing one, and higher quality over lower', async () => {
-    const id = makeTrack({ files: [
-      { uri: '/gone.flac', present: false, rank: 10_000 },
-      { uri: '/here.mp3', present: true, rank: 100 }
-    ]})
-    await player.playTrack(id)
-    expect(engine.loaded).toEqual(['/here.mp3'])
+  it('prefers higher quality among sources that exist', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'anthem-player-'))
+    const lossless = join(dir, 'a.flac')
+    const lossy = join(dir, 'b.mp3')
+    writeFileSync(lossless, Buffer.alloc(16))
+    writeFileSync(lossy, Buffer.alloc(16))
+    try {
+      const id = makeTrack({ files: [
+        { uri: lossy, rank: 100 },
+        { uri: lossless, rank: 10_000 }
+      ]})
+      await player.playTrack(id)
+      expect(engine.loaded).toEqual([lossless])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 
-  it('reports a track with no playable file instead of failing silently', async () => {
+  it('says a track has no file at all, rather than failing at load', async () => {
     db.prepare("INSERT INTO tracks (title, added, modified) VALUES ('orphan', 0, 0)").run()
     await player.playTrack(lastId())
 
     const s = player.status()
     expect(s.state).toBe('error')
-    expect(s.error).toMatch(/No playable file/)
+    expect(s.error).toMatch(/no file/i)
+  })
+
+  it('says the file is missing when the row exists but the file does not', async () => {
+    // The common case in an imported library: rows describing files that have since gone.
+    const id = makeTrack({ files: [{ uri: '/definitely/not/here.flac' }] })
+    await player.playTrack(id)
+
+    const s = player.status()
+    expect(s.state).toBe('error')
+    expect(s.error).toMatch(/missing/i)
+    // Never hand an absent path to the engine; "loading failed" explains nothing.
+    expect(engine.loaded).toEqual([])
+  })
+
+  it('marks a vanished file absent, so the library corrects itself as it is used', async () => {
+    const id = makeTrack({ files: [{ uri: '/definitely/not/here.flac', present: true }] })
+    await player.playTrack(id)
+
+    const row = db.prepare('SELECT present FROM media WHERE track_id = ?').get(id) as
+      { present: number }
+    expect(row.present).toBe(0)
+  })
+
+  it('falls through to a source that is really there', async () => {
+    const real = join(tmpdir(), `anthem-player-${Date.now()}.flac`)
+    writeFileSync(real, Buffer.alloc(16))
+    try {
+      const id = makeTrack({ files: [
+        { uri: '/gone/first.flac', rank: 10_000 },
+        { uri: real, rank: 1 }
+      ]})
+      await player.playTrack(id)
+      expect(engine.loaded).toEqual([real])
+    } finally {
+      rmSync(real, { force: true })
+    }
   })
 
   it('applies ReplayGain only when asked', async () => {
@@ -272,7 +327,7 @@ describe('engine hand-off', () => {
     await player.playTrack(a, 0)
     await new Promise((r) => setTimeout(r, 0))
 
-    expect(engine.preloaded).toContain(`/music/${b}.flac`)
+    expect(engine.preloaded).toContain(join(scratch, `${b}.flac`))
   })
 
   it('surfaces an engine error in the status', async () => {

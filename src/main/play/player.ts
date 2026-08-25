@@ -5,6 +5,8 @@
 // standing playlist, and what repeat and shuffle mean. The engine underneath is injected, so all of
 // it is testable without spawning a process.
 
+import { existsSync } from 'node:fs'
+
 import type { LoadOptions, PlaybackEngine } from './engine'
 import type { Db } from '../library/identity'
 
@@ -151,32 +153,56 @@ export class Player {
   }
 
   /**
-   * The best available source for a track: present files first, then quality rank. A track whose
-   * files have all gone missing is unplayable rather than an error to be surprised by later.
+   * The best source that is actually there.
+   *
+   * Existence is checked rather than trusted: a library imported from elsewhere, or scanned before
+   * a drive was unplugged, is full of rows whose files have since gone. Handing one of those to the
+   * engine produces "loading failed", which tells the listener nothing. A row found to be absent is
+   * marked so, which also means the library corrects itself as it is used.
    */
   private loadMedia(trackId: number): PlayerMedia | null {
-    const row = this.db.prepare(`
-      SELECT m.id, m.uri, m.start_ms AS startMs, m.end_ms AS endMs,
+    const rows = this.db.prepare(`
+      SELECT m.id, m.uri, m.present, m.start_ms AS startMs, m.end_ms AS endMs,
              t.rg_track_gain AS trackGain, t.rg_album_gain AS albumGain
       FROM media m JOIN tracks t ON t.id = m.track_id
       WHERE m.track_id = ? AND m.kind = 'file'
-      ORDER BY m.present DESC, m.quality_rank DESC, m.id
-      LIMIT 1`).get(trackId as never) as
-      { id: number; uri: string; startMs: number | null; endMs: number | null
-        trackGain: number | null; albumGain: number | null } | undefined
-
-    if (!row) return null
+      ORDER BY m.present DESC, m.quality_rank DESC, m.id`).all(trackId as never) as
+      { id: number; uri: string; present: number; startMs: number | null; endMs: number | null
+        trackGain: number | null; albumGain: number | null }[]
 
     const mode = this.opts.replayGain ?? 'off'
-    const gain = mode === 'track' ? row.trackGain : mode === 'album' ? row.albumGain : null
 
-    return {
-      id: row.id,
-      uri: row.uri,
-      startMs: row.startMs,
-      endMs: row.endMs,
-      gainDb: gain === null ? null : gain + (this.opts.preampDb ?? 0)
+    for (const row of rows) {
+      if (!existsSync(row.uri)) {
+        if (row.present === 1) {
+          this.db.prepare('UPDATE media SET present = 0 WHERE id = ?').run(row.id as never)
+        }
+        continue
+      }
+
+      // Found on disk after being marked absent: the drive came back, so record that.
+      if (row.present === 0) {
+        this.db.prepare('UPDATE media SET present = 1 WHERE id = ?').run(row.id as never)
+      }
+
+      const gain = mode === 'track' ? row.trackGain : mode === 'album' ? row.albumGain : null
+      return {
+        id: row.id,
+        uri: row.uri,
+        startMs: row.startMs,
+        endMs: row.endMs,
+        gainDb: gain === null ? null : gain + (this.opts.preampDb ?? 0)
+      }
     }
+
+    return null
+  }
+
+  /** Whether a track has any file on disk, without loading it. */
+  private hasAnyMedia(trackId: number): boolean {
+    return ((this.db.prepare(
+      `SELECT COUNT(*) AS n FROM media WHERE track_id = ? AND kind = 'file'`)
+      .get(trackId as never) as { n: number }).n) > 0
   }
 
   // ── statistics ─────────────────────────────────────────────────────────
@@ -282,7 +308,10 @@ export class Player {
       this.currentTrack = track
       this.currentMedia = null
       this.state = 'error'
-      this.error = 'No playable file for this track'
+      // Distinguish "never had a file" from "the file is gone", because the fix differs.
+      this.error = this.hasAnyMedia(trackId)
+        ? 'The file for this track is missing. Rescan its folder, or reconnect the drive it is on.'
+        : 'This track has no file. It exists in the library, but nothing is attached to it.'
       this.publish()
       return
     }
