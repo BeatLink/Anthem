@@ -21,7 +21,10 @@ function createWindow(): BrowserWindow {
       preload: join(__dirname, '../preload/index.mjs'),
       sandbox: false,
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      // A player must keep ticking when its window is hidden or occluded; Chromium otherwise
+      // throttles timers to about once a minute, stalling position updates and queue advances.
+      backgroundThrottling: false
     }
   })
 
@@ -40,6 +43,10 @@ function createWindow(): BrowserWindow {
 
   return win
 }
+
+app.commandLine.appendSwitch('disable-background-timer-throttling')
+app.commandLine.appendSwitch('disable-renderer-backgrounding')
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows')
 
 app.whenReady().then(() => {
   // Anthem's own directories are the only paths it may ever write to (see safety.ts).

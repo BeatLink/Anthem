@@ -295,6 +295,7 @@ export interface AnthemApi {
     resolutions?: Record<string, Resolution>
   }) => MergeResult
   'tracks:unmerge': (batchId: string) => { batchId: string; restored: number[]; survivor: number }
+  'app:log': (message: string) => { logged: boolean }
   'tracks:details': (trackId: number) => TrackDetails | null
   'tracks:reveal': (uri: string) => { revealed: boolean }
   'player:status': () => PlayerStatus
@@ -358,7 +359,7 @@ export const CHANNELS: readonly Channel[] = [
   'import:gmbDefaultPath', 'import:gmbBrowse', 'import:gmbPreview', 'import:gmbRun',
   'library:roots', 'library:addRoot', 'library:removeRoot', 'library:scan', 'library:scanCancel',
   'tracks:mergePreview', 'tracks:merge', 'tracks:unmerge', 'tracks:duplicates',
-  'tracks:details', 'tracks:reveal',
+  'app:log', 'tracks:details', 'tracks:reveal',
   'player:status', 'player:playTrack', 'player:toggle', 'player:next', 'player:previous',
   'player:stop', 'player:seek', 'player:volume', 'player:enqueue', 'player:dequeue',
   'player:clearQueue', 'player:repeat', 'player:shuffle'

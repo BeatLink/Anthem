@@ -22,15 +22,29 @@
   let settingsSection = $state<'library' | 'folders' | 'import' | 'duplicates' | 'appearance' | 'about'>('library')
 
   onMount(() => {
+    // Renderer failures are invisible from the terminal otherwise, which turns UI bugs into
+    // guesswork. Forwarding them to the main log is cheap and always on.
+    const onError = (e: ErrorEvent): void => void ipc('app:log', `error: ${e.message}`)
+    const onRejection = (e: PromiseRejectionEvent): void =>
+      void ipc('app:log', `unhandled: ${String(e.reason)}`)
+    window.addEventListener('error', onError)
+    window.addEventListener('unhandledrejection', onRejection)
+
     const stopPlayer = player.init()
     void boot()
-    return stopPlayer
+
+    return () => {
+      window.removeEventListener('error', onError)
+      window.removeEventListener('unhandledrejection', onRejection)
+      stopPlayer()
+    }
   })
 
   async function boot(): Promise<void> {
     info = await ipc('app:info')
     safety = await ipc('app:safety')
     await library.refresh()
+
     // Open settings on the Import tab when there is nothing to look at yet.
     if ((library.stats?.tracks ?? 0) === 0) {
       settingsSection = 'import'

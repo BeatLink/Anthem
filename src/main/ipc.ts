@@ -207,6 +207,11 @@ export function registerIpc(db: DB): void {
       return run as never
     })(),
 
+    'app:log': (message) => {
+      console.error(`renderer: ${message}`)
+      return { logged: true }
+    },
+
     'tracks:details': (trackId) => trackDetails(db as never, trackId) as never,
 
     'tracks:reveal': (uri) => {

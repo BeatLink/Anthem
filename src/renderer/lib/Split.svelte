@@ -67,12 +67,23 @@
     }
 
     // Keep panes filling the container as the window changes.
+    // Writing sizes straight from the observer callback resizes the very element being observed,
+    // which trips "ResizeObserver loop completed with undelivered notifications". Deferring to the
+    // next frame lets the current layout pass finish first.
+    let queued = 0
     const observer = new ResizeObserver(() => {
-      const t = extent()
-      if (t > 0 && sizes.length === specs.length) sizes = fit(sizes, t, specs)
+      if (queued) return
+      queued = requestAnimationFrame(() => {
+        queued = 0
+        const t = extent()
+        if (t > 0 && sizes.length === specs.length) sizes = fit(sizes, t, specs)
+      })
     })
     observer.observe(container)
-    return () => observer.disconnect()
+    return () => {
+      if (queued) cancelAnimationFrame(queued)
+      observer.disconnect()
+    }
   })
 
   function startDrag(index: number, event: PointerEvent): void {

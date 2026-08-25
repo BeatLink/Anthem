@@ -104,11 +104,6 @@
         Queue {library.selectedCount()}
       </button>
     {/if}
-    {#if library.selectedCount() === 1}
-      <button class="clear" onclick={() => (inspecting = library.selectedIds()[0]!)}>
-        Properties
-      </button>
-    {/if}
     {#if library.selectedCount() > 1}
       <button class="merge" onclick={() => (merging = library.selectedIds())}>
         Merge {library.selectedCount()}…

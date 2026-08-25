@@ -42,12 +42,22 @@
     const dismiss = (e: Event): void => {
       if (menu && !menu.contains(e.target as Node)) onclose?.()
     }
-    document.addEventListener('pointerdown', dismiss)
-    document.addEventListener('contextmenu', dismiss)
-    window.addEventListener('blur', () => onclose?.())
+    const onBlur = (): void => onclose?.()
+
+    // Svelte flushes effects synchronously after an event handler, so attaching immediately would
+    // register these while the very click that opened the menu is still bubbling — and the menu
+    // would dismiss itself the instant it appeared. Waiting a turn lets that event finish.
+    const attach = setTimeout(() => {
+      document.addEventListener('pointerdown', dismiss)
+      document.addEventListener('contextmenu', dismiss)
+      window.addEventListener('blur', onBlur)
+    }, 0)
+
     return () => {
+      clearTimeout(attach)
       document.removeEventListener('pointerdown', dismiss)
       document.removeEventListener('contextmenu', dismiss)
+      window.removeEventListener('blur', onBlur)
     }
   })
 
