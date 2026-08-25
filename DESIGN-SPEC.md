@@ -34,7 +34,8 @@ Anthem keeps the model and replaces the substrate:
 
 ### 1.2 Success criteria
 
-1. 250,000-track library: cold start to interactive under 3 seconds; any filter/sort/group under 100 ms.
+1. 50,000-track library: cold start to interactive under 3 seconds; any filter, sort or group under
+   100 ms. Larger libraries must degrade gracefully, not fall over (§12.1).
 2. Every gmusicbrowser filter operator has an Anthem equivalent, and an importer converts existing
    gmusicbrowser filters and layouts.
 3. A user can move a panel, add a column, and restyle the whole app without recompiling anything.
@@ -73,7 +74,7 @@ Anthem keeps the model and replaces the substrate:
 │       └────────────┴────────────┴────────────┘                      │
 │              SQLite (WAL, STRICT) + FTS5                            │
 │                                                                     │
-│  worker_threads: scan · hash · index-build · replaygain             │
+│  worker_threads: scan · hash · replaygain                           │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -97,9 +98,9 @@ benefit), pure web/PWA (no tag writing, no gapless, no filesystem watch).
 
 ### 2.2 Renderer: TypeScript + Svelte 5 + Vite
 
-Svelte 5 runes over React because the two hot paths — a 250k-row virtualized list and a playback
-position tick — are where React's re-render accounting costs most, and because scoped
-token-only styling is built into Svelte SFCs rather than being a separate decision.
+Svelte 5 runes over React because the two hot paths — a virtualized list of tens of thousands of
+rows and a playback position tick — are where React's re-render accounting costs most, and because
+scoped token-only styling is built into Svelte SFCs rather than being a separate decision.
 
 **This choice is deliberately made cheap to reverse.** See §2.4: everything that is expensive to
 rewrite lives outside the renderer. The strongest argument for React is `dnd-kit` for the M7 layout
@@ -111,7 +112,7 @@ Three execution contexts, and the split is not optional:
 
 - **Main** — library, query engine, tag I/O, playback supervision, services. Owns the SQLite
   connection; nothing else may open the database.
-- **`worker_threads` pool** — scanning, hashing, index building, ReplayGain analysis. Mandatory,
+- **`worker_threads` pool** — scanning, hashing, ReplayGain analysis. Mandatory,
   not an optimization: a blocked main thread stalls playback *control* and the UI simultaneously.
 - **Renderer** — presentation. No Node integration, `contextIsolation` on, and a strict CSP.
 
@@ -372,20 +373,22 @@ The `media` kind is what makes "I have this in FLAC" and "show me everything und
 behave correctly on a track that has several sources. Sorting and grouping on a `media` field use
 the preferred source (`quality_rank DESC, id`).
 
-### 3.5.3 In-memory index
+### 3.5.3 No in-memory index (and when to build one)
 
-SQLite is durable truth; it is not fast enough for interactive group-by over 250k rows at 60 fps.
-The main process keeps a columnar mirror, built inside a worker and handed over as
-`SharedArrayBuffer` so the main thread never blocks on it:
+Earlier drafts specified a columnar in-memory mirror — typed-array columns, roaring bitmaps per
+interned value, a `SharedArrayBuffer` handoff from a worker — because a 250k-track target demanded
+it. **At the 50k target that machinery is unnecessary, and it is therefore not in v1.**
 
-- Scalar fields → `Int32Array` / `Float64Array` columns, indexed by a dense `TrackIdx` (not row id).
-- Set fields → roaring bitmaps (`roaring-wasm`) per value id. `genre = Rock` is a bitmap lookup;
-  `Rock AND NOT Live` is two bitmap operations.
-- Strings → an interned symbol table with precomputed `Intl.Collator` sort keys.
-- Computed fields are materialized, because the native predicate cannot run SQL expressions.
+The measurements in §12 are the argument: SQLite answers a compound filter over 50k tracks in 32 ms
+and a filter-pane group-by in 33 ms, both well inside a 100 ms interactive budget. Building a second
+copy of the library in memory to beat numbers already three times under budget would be pure cost —
+a synchronization surface, a memory footprint, a class of bugs where the two representations
+disagree, and a worker protocol to maintain.
 
-Filters produce a bitmap; sorts produce an index vector; the renderer receives only the windows it
-draws. Above ~1M tracks the index degrades to SQL-only mode — documented, not silent.
+**Build one when, and only when**, a real library misses a §12 budget. The trigger is a measurement,
+not a hunch. The work is scoped and the seam already exists: `src/main/query/evaluate.ts` is a
+complete native predicate over an `IndexedTrack` shape, so an index would supply data to an
+evaluator that is already written and already tested against SQL.
 
 ### 3.6 Ratings
 
@@ -448,14 +451,23 @@ reference another by id — cycles are detected at save time and rejected).
 
 The same AST compiles to:
 
-1. **A native predicate** over the in-memory index — bitmap intersection for set ops, SIMD-friendly
-   scans for numerics. This is what the UI hits on every keystroke.
-2. **Parameterized SQL** — used for durable smart-playlist definitions, headless/CLI queries, and as
-   the fallback when the in-memory index is disabled.
+1. **Parameterized SQL** — the primary path. Every list, pane, count and saved playlist is answered
+   by SQLite, which at the §12 target is fast enough that nothing else is needed.
+2. **A native predicate** (`evaluate.ts`) — answers *"does this one track match this filter?"*
+   without a database round trip.
 
-Both are property-tested against each other: for a generated corpus and a generated AST, the two
-paths must return identical id sets. This test is non-negotiable — it is the only thing that keeps
-the fast path honest.
+The second target is not a performance shortcut any more; dropping the 250k target removed that
+justification (§3.5.3). It earns its place on a different job: **live membership**. A smart playlist
+marked `refresh: 'live'` must react when a track is rated, played, skipped or retagged. Re-running
+every live filter as SQL on every such event is wasteful and gets worse as saved playlists
+accumulate; evaluating the changed track against each filter in memory is a handful of comparisons.
+The same mechanism serves queue auto-fill (§8.2) and "is the playing track still in the current
+view?".
+
+Both paths are held to the same standard: for a generated corpus and a generated AST, they must
+return identical id sets (§13.1). That test is what makes it safe to have two implementations of the
+same semantics at all — and it has already caught one divergence that would have silently dropped
+tracks from negated filters.
 
 ### 4.3 Smart playlists
 
@@ -684,6 +696,24 @@ transform-based (`translate3d` on a spacer), not `position: absolute` per row. S
 
 ## 7. Tag management
 
+### 7.0 Read-only mode
+
+**Anthem starts read-only and stays that way until told otherwise.** A music library is often
+irreplaceable, and the failure mode of a tag writer with a bug is silent, widespread and permanent.
+
+Enforcement is a chokepoint, not a convention: every filesystem-mutating operation passes through
+`assertWritable(operation, path)` in `src/main/safety.ts`, which throws unless the path lies inside
+Anthem's own data directory. Tag writing, file organizing, artwork embedding and deletion are all
+downstream of it, so a new call site cannot forget to check.
+
+- Default: read-only. A missing or malformed `ANTHEM_ALLOW_WRITES` keeps protection on.
+- `ANTHEM_FORCE_READ_ONLY=1` pins the mode so the UI cannot disable it at all.
+- The state is surfaced in the menu bar, not buried in preferences.
+- `scripts/run.sh` pins read-only unless the caller explicitly opts out.
+
+Covered by `test/unit/safety.test.ts`, including that a sibling directory such as
+`~/.config/anthem-backup` is not mistaken for Anthem's own data directory.
+
 ### 7.1 Reading and writing
 
 `lofty-rs` is the tag layer: ID3v1/v2.2–2.4, Vorbis comments (FLAC/Ogg/Opus), MP4 `ilst`, APE,
@@ -792,9 +822,24 @@ format, oldest added, in-preferred-folder) and a reviewed batch action.
 
 ### 9.3 Import / export
 
-- **gmusicbrowser importer**: reads `gmbrc` — library entries, ratings, play counts, labels, saved
-  filters, and `.layout` files (best-effort translation to Anthem layout JSON, with a report of what
-  could not be mapped). This matters: it is the migration path for the actual target user.
+- **gmusicbrowser importer — implemented** (`src/main/import/`). Reads `gmbrc` and imports library
+  entries, ratings, play counts, skip counts, full play history, genres, groupings, labels and saved
+  lists. The path defaults to the platform's standard location and can be overridden or browsed to.
+  A preview parses without writing, so the user sees the counts before committing.
+
+  Details that matter, all pinned by tests: gmusicbrowser stores rating 255 to mean *unrated*, which
+  is not a rating of 255 and not a rating of 0; multi-value fields use a literal `\x00` separator
+  (four characters, not a NUL byte); filesystem names are percent-encoded and a malformed escape
+  must keep the value rather than lose it; timestamps are unix seconds against Anthem's
+  milliseconds. Files gmusicbrowser flagged missing import as tracks with `media.present = 0`, so
+  their ratings and history survive.
+
+  The import is deliberately conservative: one track and one media per gmusicbrowser song, with no
+  attempt to merge two files that may be the same recording. Deduplication is a separate reviewable
+  operation (§9.2); silently merging someone's library on import would be the wrong default.
+
+  Saved filters are counted and reported but not yet translated — gmusicbrowser filter strings map
+  onto the filter AST, which is its own step.
 - Playlist formats: M3U/M3U8, PLS, XSPF, CUE (read).
 - Full export: library + stats + playlists as JSON, and a plain SQLite copy.
 - iTunes XML and Rhythmbox XML import for ratings/play counts.
@@ -833,40 +878,42 @@ Deferred past v1, but the seams are designed now so it is not a rewrite:
 
 ## 12. Performance budget
 
-| Operation | Library size | Budget |
-|---|---|---|
-| Cold start → interactive | 250k | 4 s |
-| In-memory index load | 250k | 2.5 s |
-| Filter (any AST) | 250k | 150 ms |
-| Sort by any column | 250k | 250 ms |
-| Group-by for a filter pane | 250k | 120 ms |
-| Search keystroke → results | 250k | 60 ms |
-| Scroll frame | any | 16 ms |
-| Full scan | 100k files | 10 min |
-| Track change (gapless) | any | 0 audible gap |
-| Idle CPU (playing) | any | < 1% |
-| Idle RSS (playing) | 250k | < 600 MB |
-| Install size | — | ~150 MB |
+**The target library is 50,000 tracks.** That is roughly 3,300 albums — a large, seriously curated
+collection, and comfortably above what most people accumulate in a lifetime of buying and ripping.
 
-Enforced by `bench/query.bench.ts`, which runs the real compilers against generated corpora
-(`ANTHEM_BENCH_SIZE` selects the size) and is intended to fail CI on regression beyond 15%.
+Designing for 250k was costing real complexity for a case almost nobody hits, and the measurements
+below show why that trade was bad: at 50k, **plain SQLite with proper indexes meets every target
+with no in-memory index at all** (§3.5.3).
 
-**Measured at 20k tracks on the development machine**, for calibration rather than as a claim about
-the 250k target:
+| Operation | Library size | Budget | Measured |
+|---|---|---|---|
+| Cold start → interactive | 50k | 3 s | not yet measured |
+| Filter — simple predicate | 50k | 100 ms | **3.7 ms** |
+| Filter — compound (sets, dates, negation) | 50k | 100 ms | **32.3 ms** |
+| Full-library scan | 50k | 100 ms | **17.0 ms** |
+| Group-by for a filter pane | 50k | 100 ms | **28–33 ms** |
+| Sort by any column | 50k | 150 ms | **77.4 ms** |
+| Search keystroke → results | 50k | 60 ms | not yet measured |
+| Scroll frame | any | 16 ms | — |
+| Full scan | 50k files | 5 min | not yet measured |
+| Track change (gapless) | any | 0 audible gap | — |
+| Idle CPU (playing) | any | < 1% | — |
+| Idle RSS (playing) | 50k | < 400 MB | not yet measured |
+| Install size | — | ~150 MB | — |
 
-| Operation | Mean |
-|---|---|
-| Simple scalar predicate (SQL) | 1.6 ms |
-| Compound predicate — sets, dates, negation (SQL) | 11.7 ms |
-| Compound predicate (native) | 5.9 ms |
-| Group by genre (multi-value) | 13.9 ms |
-| Sort by album then track number | 31.4 ms |
+Measured figures are means from `bench/query.bench.ts` on the development machine, over the
+synthetic corpus in `test/helpers/corpus.ts`. Every query path has roughly 3× headroom against its
+budget.
 
-Two honest readings of that table. First, the native predicate is ~2× the SQL path on compound
-filters, which is the gap the in-memory index is meant to widen. Second, **sort does not extrapolate
-inside budget**: 31 ms at 20k is ~390 ms at 250k, over the 250 ms line. The cause is known — sorting
-on `album` currently runs a correlated subquery per row because `album` is a computed field — and the
-fix (join, or materialize in the index) is scheduled with the index work in M1.
+### 12.1 Above 50k: degradation, not a wall
+
+Nothing in the design imposes a ceiling. SQLite with the indexes in §3.5.1 slows roughly linearly,
+so a 150k-track library stays usable — filters in the low hundreds of milliseconds — without any
+code change. What it does not get is a *budget*: those sizes are not optimized for, not benchmarked
+in CI, and not a reason to reject a simplification.
+
+If real libraries turn out to cluster higher than assumed, §3.5.3 describes the escape hatch and
+§16 records the reversal trigger.
 
 ## 13. Testing
 
@@ -877,8 +924,9 @@ module was last rebuilt for — the SQL under test is identical either way.
 ### 13.1 The load-bearing test
 
 `test/property/ast-agreement.test.ts`: for any generated filter over any generated library, the SQL
-compiler and the native predicate must return **identical id sets**. The fast path exists only
-because this test keeps it honest.
+compiler and the native predicate must return **identical id sets**. Two implementations of one
+semantics are only safe because this test holds them together — a live smart playlist that
+disagreed with the list it was derived from would be a maddening bug to chase (§4.2).
 
 It has already earned its place. It caught a three-valued-logic divergence: SQL's `NOT (year = 0)`
 evaluates to NULL for a track with no year and therefore excludes it, while the native predicate
@@ -939,7 +987,7 @@ anthem/
 │   │   ├── format.ts         # the format-string language
 │   │   ├── view.ts           # selection, sort, filter stack, virtualization maths
 │   │   └── ipc.ts            # the IPC contract
-│   └── workers/              # (planned) scan, hash, index-build, replaygain
+│   └── workers/              # (planned) scan, hash, replaygain
 ├── test/
 │   ├── helpers/              # corpus generator, node:sqlite harness, fast-check arbitraries
 │   ├── property/             # the AST-agreement test
@@ -961,10 +1009,10 @@ hashing, the field descriptor system, the format-string engine, framework-free v
 66-test harness including the AST-agreement property test all landed here. The app launches, migrates
 to schema v1 and opens a WAL database.
 
-**M1 — Library core (3 wk).** Scanner, watcher, tag reading, move detection via `audio_hash`, the
-in-memory index, and the `songlist` widget wired to `shared/view.ts` for real virtualization and
-column config. Also: fix the sort budget miss identified in §12. Schema and field descriptors are
-already done. Milestone test: scan and scroll 100k tracks.
+**M1 — Library core (2 wk).** Scanner, watcher, tag reading, move detection via `audio_hash`, and
+the `songlist` widget wired to `shared/view.ts` for real virtualization and column config. Schema,
+field descriptors and both query compilers are already done, and §3.5.3 removed the in-memory index
+from scope. Milestone test: scan and scroll 50k tracks.
 
 **M2 — Query engine (2 wk).** Filter AST, both compilation targets, the agreement property test,
 search bar parser, filter panes, filter stack chips.
@@ -1003,7 +1051,7 @@ visualizer library, multi-library support.
 | **A track is a piece of music, not a file** (§3.4) | None foreseen. This is the decision everything else hangs off. |
 | **Audio content hash for file identity; AcoustID as a hint only** (§3.5) | None. AcoustID's many-to-many mapping to recordings rules it out as a key regardless of collision rate. |
 | **Two-valued filter logic** (§13.1) | User reports that "not X" excluding unknowns is expected; unlikely |
-| SQLite + in-memory mirror | Mirror memory exceeds budget → SQL-only with better indexes |
+| **50k target, and no in-memory index** (§3.5.3, §12) | A real library misses a §12 budget. The trigger is a measurement, not a hunch; `evaluate.ts` already exists to be fed by an index. |
 | Svelte 5 over React | `dnd-kit` proves necessary for the M7 layout editor. Cheap by construction (§2.4). |
 | libmpv default engine | Packaging friction on Windows/macOS → promote a Web Audio or native fallback |
 | `node-taglib-sharp` for tags | Golden-file failures it cannot fix → swap the `TagIO` implementation for a mutagen sidecar (Appendix A.5) |

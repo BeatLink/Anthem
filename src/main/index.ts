@@ -3,6 +3,7 @@ import { join } from 'node:path'
 
 import { openLibrary, libraryPath } from './db'
 import { registerIpc } from './ipc'
+import { initSafety, safetyStatus } from './safety'
 
 const isDev = !app.isPackaged
 
@@ -40,7 +41,12 @@ function createWindow(): BrowserWindow {
 }
 
 app.whenReady().then(() => {
+  // Anthem's own directories are the only paths it may ever write to (see safety.ts).
+  initSafety([app.getPath('userData'), join(app.getPath('temp'), 'anthem')])
+
   const db = openLibrary()
+  const safety = safetyStatus()
+  console.log(`anthem: ${safety.reason}`)
   console.log(`anthem: library at ${libraryPath()}`)
   registerIpc(db)
 

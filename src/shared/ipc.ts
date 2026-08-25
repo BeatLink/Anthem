@@ -40,6 +40,37 @@ export interface QueryRequest {
   offset?: number
 }
 
+export interface SafetyStatus {
+  readOnly: boolean
+  pinned: boolean
+  reason: string
+}
+
+export interface GmbPreview {
+  path: string
+  exists: boolean
+  version?: string
+  baseFolder?: string
+  songs: number
+  savedFilters: number
+  savedLists: number
+  playHistoryEntries: number
+  unmappedColumns: string[]
+  error?: string
+}
+
+export interface ImportReport {
+  songsRead: number
+  tracksCreated: number
+  mediaCreated: number
+  missingFlagged: number
+  playHistoryRows: number
+  playlistsCreated: number
+  savedFiltersFound: number
+  unmappedColumns: string[]
+  notes: string[]
+}
+
 export interface AppInfo {
   version: string
   electron: string
@@ -57,6 +88,12 @@ export interface AnthemApi {
   'library:explain': (req: QueryRequest) => { sql: string; params: unknown[] }
   'fields:list': () => FieldDescriptor[]
   'theme:list': () => string[]
+  'app:safety': () => SafetyStatus
+  'import:gmbDefaultPath': () => string
+  'import:gmbBrowse': () => string | null
+  'import:gmbPreview': (path: string) => GmbPreview
+  'import:gmbRun': (req: { path: string; statistics?: boolean; labels?: boolean; playlists?: boolean }) => ImportReport
+  'library:reset': () => { cleared: boolean }
 }
 
 export type Channel = keyof AnthemApi
@@ -64,6 +101,7 @@ export type ApiArgs<C extends Channel> = Parameters<AnthemApi[C]>
 export type ApiResult<C extends Channel> = ReturnType<AnthemApi[C]>
 
 export const CHANNELS: readonly Channel[] = [
-  'app:info', 'library:stats', 'library:query', 'library:groupBy',
-  'library:explain', 'fields:list', 'theme:list'
+  'app:info', 'app:safety', 'library:stats', 'library:query', 'library:groupBy',
+  'library:explain', 'library:reset', 'fields:list', 'theme:list',
+  'import:gmbDefaultPath', 'import:gmbBrowse', 'import:gmbPreview', 'import:gmbRun'
 ]

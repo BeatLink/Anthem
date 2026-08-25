@@ -12,6 +12,13 @@
 
   const template = $derived(columns.map(width).join(' '))
 
+  const arrow = (id: string): string => {
+    const dir = library.sortDir(id)
+    if (!dir) return ''
+    const p = library.sortPriority(id)
+    return `${dir === 'asc' ? '▲' : '▼'}${p > 1 ? p : ''}`
+  }
+
   const mmss = (ms: number | null): string => {
     if (ms === null) return ''
     const s = Math.round(ms / 1000)
@@ -20,9 +27,30 @@
 </script>
 
 <section class="songlist" aria-label="Song list">
+  <div class="hbsonglist">
+    <input
+      class="search"
+      type="search"
+      placeholder="Search…"
+      value={library.search}
+      oninput={(e) => library.setSearch(e.currentTarget.value)}
+    />
+    {#each library.chips() as chip (chip.id)}
+      <button class="chip" onclick={() => library.removeChip(chip.id)} title="Remove filter">
+        {chip.label} ✕
+      </button>
+    {/each}
+    <span class="spacer"></span>
+    <span class="count">{library.tracks.length.toLocaleString()} shown</span>
+  </div>
+
   <div class="head" style:grid-template-columns={template}>
     {#each columns as c (c)}
-      <div class="cell head-cell" style:text-align={align(c)}>{heading(c)}</div>
+      <button
+        class="cell head-cell"
+        style:text-align={align(c)}
+        onclick={(e) => library.toggleSort(c, e.shiftKey)}
+      >{heading(c)} <span class="arrow">{arrow(c)}</span></button>
     {/each}
   </div>
 
@@ -40,14 +68,10 @@
       </div>
     {:else}
       <div class="empty">
-        <p>No tracks yet.</p>
+        <p>No tracks match.</p>
         <p class="hint">
-          The library database is the source of truth — tracks live here even when their files move,
-          change format, or go missing.
+          Import your gmusicbrowser library from the Library menu, or clear the active filters.
         </p>
-        {#if library.lastSql}
-          <pre>{library.lastSql}</pre>
-        {/if}
       </div>
     {/each}
   </div>
@@ -56,9 +80,45 @@
 <style>
   .songlist {
     display: grid;
-    grid-template-rows: auto 1fr;
+    grid-template-rows: auto auto 1fr;
     min-height: 0;
   }
+
+  .hbsonglist {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border-bottom: 1px solid var(--border-default);
+  }
+
+  .search {
+    width: 240px;
+    height: var(--control-height-sm);
+    padding: 0 var(--space-3);
+    font: inherit;
+    color: var(--text-body);
+    background: var(--surface-secondary);
+    border: 1px solid transparent;
+    border-radius: var(--radius-md);
+  }
+
+  .search:focus { background: var(--surface-default); border-color: var(--border-focus); outline: none; }
+
+  .chip {
+    height: var(--control-height-sm);
+    padding: 0 var(--space-3);
+    font-size: var(--font-size-sm);
+    color: var(--text-on-fill);
+    background: var(--accent);
+    border: 0;
+    border-radius: var(--radius-full);
+    cursor: pointer;
+  }
+
+  .count { font-size: var(--font-size-sm); color: var(--text-tertiary); }
+  .spacer { flex: 1; }
+  .arrow { color: var(--accent); font-size: 9px; }
 
   .head {
     display: grid;
@@ -70,8 +130,13 @@
     font-size: var(--font-size-sm);
     font-weight: 600;
     color: var(--text-secondary);
+    background: transparent;
+    border: 0;
     border-right: 1px solid var(--column-separator);
+    cursor: pointer;
   }
+
+  .head-cell:hover { background: var(--surface-navigation-hover); color: var(--text-body); }
 
   .body { overflow-y: auto; }
 
@@ -102,14 +167,4 @@
   .empty p { margin: 0 0 var(--space-3); }
   .hint { color: var(--text-tertiary); }
 
-  pre {
-    padding: var(--space-3);
-    overflow-x: auto;
-    font-family: var(--font-mono);
-    font-size: var(--font-size-sm);
-    color: var(--text-secondary);
-    background: var(--surface-secondary);
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-md);
-  }
 </style>

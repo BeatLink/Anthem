@@ -62,7 +62,7 @@ otherwise makes Electron run as bare node and die on the ESM entry point.
 | `npm run theme` | Regenerate `themes/halon/halon.css` from `tokens.json` |
 | `npm run rebuild:electron` | Rebuild `better-sqlite3` against Electron's ABI |
 
-Benchmarks default to 100k synthetic tracks; `ANTHEM_BENCH_SIZE=20000 npm run bench` for a quicker
+Benchmarks default to 50k synthetic tracks (the §12 target); `ANTHEM_BENCH_SIZE=20000 npm run bench` for a quicker
 pass. Point the app at a scratch database with `ANTHEM_DB=/tmp/anthem.db`.
 
 ## Testing

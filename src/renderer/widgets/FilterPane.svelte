@@ -1,39 +1,52 @@
 <script lang="ts">
   import { library } from '../stores/library.svelte'
+  import type { GroupRow } from '@shared/ipc'
+  import { untrack } from 'svelte'
+  import { field as fieldDef } from '@shared/fields'
 
-  const groupable = ['genre', 'album_artist', 'artist', 'grouping', 'year', 'codec']
+  let { field = 'genre' }: { field?: string } = $props()
 
-  async function setField(f: string): Promise<void> {
-    library.groupField = f
-    await library.refresh()
+  const groupable = ['genre', 'album_artist', 'artist', 'album', 'grouping', 'year', 'codec']
+
+  // The prop is fixed configuration; the select then owns the value.
+  let current = $state(untrack(() => field))
+  let rows = $state<GroupRow[]>([])
+  let selected = $state<string | null>(null)
+
+  async function load(): Promise<void> {
+    rows = await library.groupsFor(current)
   }
 
-  const duration = (ms: number): string => {
-    const h = Math.floor(ms / 3_600_000)
-    const m = Math.round((ms % 3_600_000) / 60_000)
-    return h ? `${h}h ${m}m` : `${m}m`
+  $effect(() => { void current; void library.version; void load() })
+
+  async function pick(row: GroupRow): Promise<void> {
+    const label = row.label ?? null
+    selected = selected === label ? null : label
+    await library.setPaneFilter(current, selected)
   }
+
 </script>
 
 <section class="pane" aria-label="Filter pane">
   <header>
-    <select value={library.groupField} onchange={(e) => setField(e.currentTarget.value)}>
+    <select value={current} onchange={(e) => (current = e.currentTarget.value)}>
       {#each groupable as f (f)}
-        <option value={f}>{f}</option>
+        <option value={f}>{fieldDef(f).name}</option>
       {/each}
     </select>
-    <span class="count">{library.groups.length} values</span>
+    <span class="count">{rows.length}</span>
   </header>
 
   <ul>
-    {#each library.groups as g (g.gid)}
+    {#each rows as g (g.gid)}
       <li>
-        <span class="label">{g.label ?? '(none)'}</span>
-        <span class="n">{g.n}</span>
-        <span class="dur">{duration(g.total_ms)}</span>
+        <button class="row" class:sel={selected === (g.label ?? null)} onclick={() => pick(g)}>
+          <span class="label">{g.label ?? '(none)'}</span>
+          <span class="n">{g.n}</span>
+        </button>
       </li>
     {:else}
-      <li class="empty">Library is empty — add a music folder to begin.</li>
+      <li class="empty">No values</li>
     {/each}
   </ul>
 </section>
@@ -43,7 +56,8 @@
     display: grid;
     grid-template-rows: auto 1fr;
     min-height: 0;
-    border-bottom: 1px solid var(--border-default);
+    min-width: 0;
+    border-right: 1px solid var(--border-default);
   }
 
   header {
@@ -68,22 +82,28 @@
 
   ul { margin: 0; padding: 0; overflow-y: auto; list-style: none; }
 
-  li {
+  .row {
     display: grid;
-    grid-template-columns: 1fr auto auto;
-    gap: var(--space-4);
+    grid-template-columns: 1fr auto;
+    gap: var(--space-3);
     align-items: center;
+    width: 100%;
     height: var(--row-height);
-    padding: 0 var(--space-4);
+    padding: 0 var(--space-3);
+    font: inherit;
+    color: inherit;
+    text-align: left;
+    background: transparent;
+    border: 0;
+    cursor: pointer;
   }
 
-  li:nth-child(odd) { background: var(--row-odd); }
-  li:hover { background: var(--row-hover); }
+  li:nth-child(odd) .row { background: var(--row-odd); }
+  .row:hover { background: var(--row-hover); }
+  .row.sel { background: var(--row-selected); color: var(--text-heading); }
 
   .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .n { font-variant-numeric: tabular-nums; color: var(--text-secondary); }
-  .dur { font-variant-numeric: tabular-nums; color: var(--text-tertiary); min-width: 4rem; text-align: right; }
-
   .empty {
     display: block;
     height: auto;

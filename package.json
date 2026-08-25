@@ -16,10 +16,12 @@
     "test:coverage": "vitest run --coverage",
     "bench": "vitest bench --run",
     "rebuild:electron": "electron-rebuild -f -w better-sqlite3",
-    "check": "npm run typecheck && npm run test"
+    "check": "npm run typecheck && npm run test",
+    "app": "bash scripts/run.sh"
   },
   "dependencies": {
-    "better-sqlite3": "^13.0.3"
+    "better-sqlite3": "^13.0.3",
+    "music-metadata": "^11.15.0"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.2.0",

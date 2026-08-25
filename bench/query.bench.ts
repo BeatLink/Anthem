@@ -12,7 +12,7 @@ import { and, or, leaf, not } from '@shared/filter'
 import { makeCorpus, FIXED_NOW } from '../test/helpers/corpus'
 import { loadCorpus } from '../test/helpers/sqlite'
 
-const SIZE = Number(process.env.ANTHEM_BENCH_SIZE ?? 100_000)
+const SIZE = Number(process.env.ANTHEM_BENCH_SIZE ?? 50_000)
 
 const corpus = makeCorpus(SIZE, 2024)
 const db = new DatabaseSync(':memory:')
@@ -37,13 +37,13 @@ const run = (node: Parameters<typeof compileFilter>[0]): void => {
   db.prepare(sql).all(...(params as never[]))
 }
 
-describe(`SQL filter over ${SIZE.toLocaleString()} tracks (budget: 150ms)`, () => {
+describe(`SQL filter over ${SIZE.toLocaleString()} tracks (budget: 100ms)`, () => {
   bench('simple scalar predicate', () => run(SIMPLE))
   bench('compound predicate with sets, dates and negation', () => run(COMPOUND))
   bench('full-library scan', () => run(and()))
 })
 
-describe(`native predicate over ${SIZE.toLocaleString()} tracks (budget: 150ms)`, () => {
+describe(`native predicate over ${SIZE.toLocaleString()} tracks (budget: 100ms)`, () => {
   bench('simple scalar predicate', () => {
     selectIds(SIMPLE, corpus.tracks, { now: FIXED_NOW })
   })
@@ -52,7 +52,7 @@ describe(`native predicate over ${SIZE.toLocaleString()} tracks (budget: 150ms)`
   })
 })
 
-describe(`group-by over ${SIZE.toLocaleString()} tracks (budget: 120ms)`, () => {
+describe(`group-by over ${SIZE.toLocaleString()} tracks (budget: 100ms)`, () => {
   bench('group by genre (multi-value)', () => {
     const { sql, params } = compileGroupBy(and(), 'genre', FIXED_NOW)
     db.prepare(sql).all(...(params as never[]))
@@ -63,7 +63,7 @@ describe(`group-by over ${SIZE.toLocaleString()} tracks (budget: 120ms)`, () => 
   })
 })
 
-describe(`sort over ${SIZE.toLocaleString()} tracks (budget: 250ms)`, () => {
+describe(`sort over ${SIZE.toLocaleString()} tracks (budget: 150ms)`, () => {
   bench('sort by album then track number', () => {
     const { sql, params } = compileFilter(and(), {
       now: FIXED_NOW,
