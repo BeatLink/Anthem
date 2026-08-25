@@ -3,6 +3,8 @@
   import type { GmbPreview, ImportReport } from '@shared/ipc'
   import { library } from '../../stores/library.svelte'
 
+  let { ondone }: { ondone?: () => void } = $props()
+
   let path = $state('')
   let preview = $state<GmbPreview | null>(null)
   let report = $state<ImportReport | null>(null)
@@ -131,6 +133,8 @@
       {#each report.notes as note (note)}
         <p class="note">{note}</p>
       {/each}
+
+      <button class="primary big" onclick={ondone}>Show my library →</button>
     </div>
   {/if}
 </section>
@@ -201,5 +205,5 @@
   }
 
   .report p { margin: 0 0 var(--space-2); }
-  .report p:last-child { margin-bottom: 0; }
+  .big { margin-top: var(--space-2); height: var(--control-height-lg); }
 </style>

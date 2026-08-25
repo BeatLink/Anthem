@@ -37,6 +37,10 @@
 
   let clearing = $state(false)
 
+  function onKeydown(e: KeyboardEvent): void {
+    if (e.key === 'Escape') onclose?.()
+  }
+
   async function clearLibrary(): Promise<void> {
     clearing = true
     try {
@@ -54,7 +58,12 @@
   }
 </script>
 
-<div class="settings" role="dialog" aria-label="Settings">
+<svelte:window onkeydown={onKeydown} />
+
+<div class="backdrop">
+  <button class="scrim" aria-label="Close settings" onclick={onclose}></button>
+
+  <div class="settings" role="dialog" aria-modal="true" aria-label="Settings" tabindex="-1">
   <nav>
     <div class="title">Settings</div>
     {#each sections as s (s.id)}
@@ -65,6 +74,10 @@
   </nav>
 
   <div class="pane">
+    <button class="pane-close" onclick={onclose} aria-label="Close settings" title="Close settings">
+      ✕
+    </button>
+
     {#if section === 'library'}
       <section>
         <h2>Library</h2>
@@ -118,7 +131,7 @@
       </section>
 
     {:else if section === 'import'}
-      <GmbImport />
+      <GmbImport ondone={onclose} />
 
     {:else if section === 'appearance'}
       <section>
@@ -170,16 +183,40 @@
       </section>
     {/if}
   </div>
+  </div>
 </div>
 
 <style>
-  .settings {
+  .backdrop {
     position: absolute;
     inset: 0;
     z-index: 10;
     display: grid;
-    grid-template-columns: 200px 1fr;
+    place-items: center;
+    padding: var(--space-6);
+  }
+
+  .scrim {
+    position: absolute;
+    inset: 0;
+    padding: 0;
+    background: var(--surface-overlay);
+    border: 0;
+    cursor: default;
+  }
+
+  .settings { position: relative; }
+
+  .settings {
+    display: grid;
+    grid-template-columns: 180px 1fr;
+    width: min(920px, 100%);
+    height: min(620px, 100%);
+    overflow: hidden;
     background: var(--surface-default);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-lg);
+    box-shadow: 0 18px 48px var(--shadow-modal);
   }
 
   nav {
@@ -187,6 +224,7 @@
     flex-direction: column;
     gap: var(--space-1);
     padding: var(--space-4) var(--space-3);
+    overflow-y: auto;
     background: var(--surface-navigation);
     border-right: 1px solid var(--border-default);
   }
@@ -215,8 +253,28 @@
 
   .grow { flex: 1; }
   .close { color: var(--text-tertiary); }
+  .close:hover { color: var(--text-body); }
 
-  .pane { overflow-y: auto; padding: var(--space-6); }
+  .pane { position: relative; overflow-y: auto; padding: var(--space-5) var(--space-6); }
+
+  .pane-close {
+    position: absolute;
+    top: var(--space-4);
+    right: var(--space-4);
+    width: var(--control-height);
+    height: var(--control-height);
+    color: var(--text-tertiary);
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+  }
+
+  .pane-close:hover {
+    color: var(--text-body);
+    background: var(--surface-secondary);
+    border-color: var(--border-default);
+  }
 
   section { display: grid; gap: var(--space-4); max-width: 80ch; }
   h2 { margin: 0; font-size: var(--font-size-lg); color: var(--text-heading); }
