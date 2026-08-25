@@ -32,6 +32,7 @@
   .stars { display: flex; gap: 1px; }
 
   button {
+    min-width: 12px;
     padding: 0;
     font-size: var(--font-size-md);
     line-height: 1;

@@ -106,8 +106,10 @@
   .search:focus { background: var(--surface-default); border-color: var(--border-focus); outline: none; }
 
   .chip {
+    flex: 0 0 auto;
     height: var(--control-height-sm);
     padding: 0 var(--space-3);
+    max-width: 260px;
     font-size: var(--font-size-sm);
     color: var(--text-on-fill);
     background: var(--accent);
@@ -127,6 +129,8 @@
   }
 
   .head-cell {
+    justify-content: flex-start;
+    gap: var(--space-1);
     font-size: var(--font-size-sm);
     font-weight: 600;
     color: var(--text-secondary);

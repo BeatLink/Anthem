@@ -10,8 +10,11 @@ import { safetyStatus } from './safety'
 import { defaultGmbrcPath, parseGmbrc } from './import/gmbrc'
 import { importGmbrc } from './import/gmb-import'
 
+// Album lives on the albums table and artist in track_values, so the row projection has to
+// resolve both rather than reading columns that no longer exist on tracks.
 const TRACK_COLUMNS = `
-  t.id, t.title, t.album, t.year, t.track_number, t.length_ms, t.rating, t.play_count,
+  t.id, t.title, t.year, t.track_number, t.length_ms, t.rating, t.play_count,
+  (SELECT a.name FROM albums a WHERE a.id = t.album_id) AS album,
   (SELECT vv.value FROM track_values tv JOIN values_ vv ON vv.id = tv.value_id
     WHERE tv.track_id = t.id AND tv.field_id = 1 ORDER BY tv.ordinal LIMIT 1) AS artist`
 

@@ -52,6 +52,7 @@
   .hbbuttons3 { display: flex; align-items: center; gap: var(--space-2); }
 
   .chip {
+    flex: 0 0 auto;
     height: var(--control-height-sm);
     padding: 0 var(--space-3);
     font-size: var(--font-size-sm);
@@ -67,8 +68,10 @@
   .hbbuttons1 { display: flex; align-items: center; gap: var(--space-1); }
 
   button {
-    width: var(--control-height);
+    min-width: var(--control-height);
     height: var(--control-height);
+    padding: 0 var(--space-2);
+    font-size: var(--font-size-md);
     color: var(--text-on-navigation);
     background: transparent;
     border: 0;

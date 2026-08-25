@@ -60,10 +60,24 @@ otherwise makes Electron run as bare node and die on the ESM entry point.
 | `npm run bench` | Performance budget benchmarks |
 | `npm run typecheck` | `tsc` for main/preload, `svelte-check` for the renderer |
 | `npm run theme` | Regenerate `themes/halon/halon.css` from `tokens.json` |
+| `npm run app` | Build if needed and launch, read-only |
 | `npm run rebuild:electron` | Rebuild `better-sqlite3` against Electron's ABI |
 
-Benchmarks default to 50k synthetic tracks (the §12 target); `ANTHEM_BENCH_SIZE=20000 npm run bench` for a quicker
-pass. Point the app at a scratch database with `ANTHEM_DB=/tmp/anthem.db`.
+Benchmarks default to 50k synthetic tracks (the §12 target); `ANTHEM_BENCH_SIZE=20000 npm run bench`
+for a quicker pass. Point the app at a scratch database with `ANTHEM_DB=/tmp/anthem.db`.
+
+### Read-only by default
+
+Anthem starts read-only and `npm run app` pins it with `ANTHEM_FORCE_READ_ONLY=1`. Every
+filesystem-mutating operation goes through `assertWritable()` in `src/main/safety.ts`, which throws
+unless the path is inside Anthem's own data directory. Point it at a real music library safely.
+
+### Getting your library in
+
+Settings → Import reads a gmusicbrowser `gmbrc`, defaulting to the standard location for your
+platform. It imports ratings, play counts, skip counts, full play history, genres, groupings,
+labels and saved lists. A preview parses the file without writing anything, so you see the counts
+first. There is no filesystem scanner yet — the importer is currently the way to populate a library.
 
 ## Testing
 

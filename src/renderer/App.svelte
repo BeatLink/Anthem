@@ -6,26 +6,35 @@
   import TabbedLists from './widgets/TabbedLists.svelte'
   import FilterPane from './widgets/FilterPane.svelte'
   import SongList from './widgets/SongList.svelte'
-  import ImportPanel from './widgets/ImportPanel.svelte'
+  import SettingsPage from './widgets/settings/SettingsPage.svelte'
 
   let info = $state<AppInfo | null>(null)
   let safety = $state<SafetyStatus | null>(null)
   let theme = $state<'light' | 'dark' | 'system'>('system')
   let rightTab = $state<'library' | 'context'>('library')
-  let showImport = $state(false)
+  let density = $state<'compact' | 'normal' | 'comfortable'>('normal')
+  let showSettings = $state(false)
+  let settingsSection = $state<'library' | 'import' | 'appearance' | 'about'>('library')
 
   onMount(async () => {
     info = await window.anthem['app:info']()
     safety = await window.anthem['app:safety']()
     await library.refresh()
-    // Offer the importer straight away when there is nothing to look at yet.
-    if ((library.stats?.tracks ?? 0) === 0) showImport = true
+    // Open settings on the Import tab when there is nothing to look at yet.
+    if ((library.stats?.tracks ?? 0) === 0) {
+      settingsSection = 'import'
+      showSettings = true
+    }
   })
 
   $effect(() => {
     const root = document.documentElement
     if (theme === 'system') root.removeAttribute('data-theme')
     else root.setAttribute('data-theme', theme)
+  })
+
+  $effect(() => {
+    document.documentElement.setAttribute('data-density', density)
   })
 
   const cycleTheme = (): void => {
@@ -50,9 +59,22 @@
         VBSongList = HBSongList(search, filter actions) _SongList
 -->
 <div class="vbmain">
+  {#if showSettings}
+    <SettingsPage
+      {info}
+      {safety}
+      {theme}
+      {density}
+      initialSection={settingsSection}
+      onclose={() => (showSettings = false)}
+      onTheme={(t) => (theme = t)}
+      onDensity={(d) => (density = d)}
+    />
+  {/if}
+
   <div class="hbmenu">
-    <button class="menu-item" onclick={() => (showImport = !showImport)}>Library</button>
-    <button class="menu-item" onclick={cycleTheme}>Layout</button>
+    <button class="menu-item"
+            onclick={() => { settingsSection = 'library'; showSettings = true }}>Settings</button>
     <span class="spacer"></span>
 
     {#if safety}
@@ -65,10 +87,6 @@
       {theme === 'dark' ? '◐' : theme === 'light' ? '◑' : '◒'}
     </button>
   </div>
-
-  {#if showImport}
-    <ImportPanel onclose={() => (showImport = false)} />
-  {/if}
 
   <div class="hpmain">
     <div class="vbleft">
@@ -128,8 +146,9 @@
 
 <style>
   .vbmain {
+    position: relative;
     display: grid;
-    grid-template-rows: auto auto 1fr auto;
+    grid-template-rows: auto 1fr auto;
     height: 100%;
     background: var(--surface-root);
   }
@@ -144,7 +163,9 @@
   }
 
   .menu-item {
+    flex: 0 0 auto;
     height: var(--control-height-sm);
+    min-width: var(--control-height-sm);
     padding: 0 var(--space-3);
     font: inherit;
     color: var(--text-on-navigation);
@@ -157,7 +178,11 @@
   .menu-item:hover { background: var(--surface-navigation-hover); }
 
   .safety {
-    padding: 2px var(--space-3);
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    height: var(--control-height-sm);
+    padding: 0 var(--space-3);
     font-size: var(--font-size-sm);
     color: var(--status-success);
     background: color-mix(in srgb, var(--status-success) 12%, transparent);

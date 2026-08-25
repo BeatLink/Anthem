@@ -17,7 +17,8 @@ function createWindow(): BrowserWindow {
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#060b14' : '#f1f5f9',
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     webPreferences: {
-      preload: join(__dirname, '../preload/index.js'),
+      // electron-vite emits an ESM preload as .mjs; loading .js here silently yields no bridge.
+      preload: join(__dirname, '../preload/index.mjs'),
       sandbox: false,
       contextIsolation: true,
       nodeIntegration: false

@@ -1,8 +1,7 @@
 <script lang="ts">
+  import { onMount } from 'svelte'
   import type { GmbPreview, ImportReport } from '@shared/ipc'
-  import { library } from '../stores/library.svelte'
-
-  let { onclose }: { onclose?: () => void } = $props()
+  import { library } from '../../stores/library.svelte'
 
   let path = $state('')
   let preview = $state<GmbPreview | null>(null)
@@ -14,24 +13,34 @@
   let labels = $state(true)
   let playlists = $state(true)
 
-  $effect(() => {
-    void (async () => {
+  onMount(async () => {
+    try {
       path = await window.anthem['import:gmbDefaultPath']()
       await check()
-    })()
+    } catch (err) {
+      error = `Could not reach the main process: ${(err as Error).message}`
+    }
   })
 
   async function check(): Promise<void> {
     if (!path) return
-    error = null
-    preview = await window.anthem['import:gmbPreview'](path)
+    try {
+      error = null
+      preview = await window.anthem['import:gmbPreview'](path)
+    } catch (err) {
+      error = (err as Error).message
+    }
   }
 
   async function browse(): Promise<void> {
-    const picked = await window.anthem['import:gmbBrowse']()
-    if (picked) {
-      path = picked
-      await check()
+    try {
+      const picked = await window.anthem['import:gmbBrowse']()
+      if (picked) {
+        path = picked
+        await check()
+      }
+    } catch (err) {
+      error = (err as Error).message
     }
   }
 
@@ -62,8 +71,11 @@
 
 <section class="import">
   <header>
-    <h2>Import from gmusicbrowser</h2>
-    <button class="close" onclick={onclose} aria-label="Close">✕</button>
+    <h2>gmusicbrowser</h2>
+    <p class="lead">
+      Imports ratings, play counts, full play history, genres, groupings, labels and saved lists.
+      Your music files are only ever read.
+    </p>
   </header>
 
   <div class="row">
@@ -124,28 +136,11 @@
 </section>
 
 <style>
-  .import {
-    display: grid;
-    gap: var(--space-3);
-    padding: var(--space-4) var(--space-5);
-    background: var(--surface-secondary);
-    border-bottom: 1px solid var(--border-default);
-  }
+  .import { display: grid; gap: var(--space-4); max-width: 70ch; }
 
-  header { display: flex; align-items: center; }
-  h2 { margin: 0; font-size: var(--font-size-lg); color: var(--text-heading); flex: 1; }
-
-  .close {
-    width: var(--control-height);
-    height: var(--control-height);
-    color: var(--text-tertiary);
-    background: transparent;
-    border: 0;
-    border-radius: var(--radius-sm);
-    cursor: pointer;
-  }
-
-  .close:hover { background: var(--surface-navigation-hover); color: var(--text-body); }
+  header { display: grid; gap: var(--space-2); }
+  h2 { margin: 0; font-size: var(--font-size-lg); color: var(--text-heading); }
+  .lead { margin: 0; font-size: var(--font-size-sm); color: var(--text-secondary); }
 
   .row { display: grid; grid-template-columns: auto 1fr auto; gap: var(--space-3); align-items: center; }
 
