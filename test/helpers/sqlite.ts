@@ -10,12 +10,15 @@ import type { Corpus } from './corpus'
 
 export type TestDb = InstanceType<typeof DatabaseSync>
 
-const SCHEMA = join(process.cwd(), 'src/main/db/migrations/001-initial.sql')
+const MIGRATIONS = [
+  'src/main/db/migrations/001-initial.sql',
+  'src/main/db/migrations/002-history-unique.sql'
+].map((p) => join(process.cwd(), p))
 
 export function freshDb(): TestDb {
   const db = new DatabaseSync(':memory:')
   db.exec('PRAGMA foreign_keys = ON')
-  db.exec(readFileSync(SCHEMA, 'utf8'))
+  for (const m of MIGRATIONS) db.exec(readFileSync(m, 'utf8'))
 
   db.function('REGEXP', (pattern: unknown, value: unknown) => {
     if (value === null || value === undefined) return 0

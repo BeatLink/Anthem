@@ -84,6 +84,7 @@
   .songlist {
     display: grid;
     grid-template-rows: auto auto 1fr;
+    height: 100%;
     min-height: 0;
   }
 
@@ -141,11 +142,13 @@
 
   .head {
     display: grid;
+    height: var(--row-height);
     background: var(--column-header);
     border-bottom: 1px solid var(--column-separator);
   }
 
   .head-cell {
+    height: 100%;
     justify-content: flex-start;
     gap: var(--space-1);
     font-size: var(--font-size-sm);

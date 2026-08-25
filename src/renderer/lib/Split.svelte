@@ -166,7 +166,13 @@
     min-height: 0;
   }
 
-  .pane { min-width: 0; min-height: 0; overflow: hidden; }
+  .pane {
+    display: grid;
+    grid-template-rows: 1fr;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+  }
 
   .gutter {
     position: relative;

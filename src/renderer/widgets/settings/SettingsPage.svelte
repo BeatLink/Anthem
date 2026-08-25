@@ -3,6 +3,7 @@
   import type { AppInfo, SafetyStatus } from '@shared/ipc'
   import { library } from '../../stores/library.svelte'
   import GmbImport from './GmbImport.svelte'
+  import ScanPanel from './ScanPanel.svelte'
 
   let {
     info = null,
@@ -18,7 +19,7 @@
     safety?: SafetyStatus | null
     theme?: 'light' | 'dark' | 'system'
     density?: 'compact' | 'normal' | 'comfortable'
-    initialSection?: 'library' | 'import' | 'appearance' | 'about'
+    initialSection?: 'library' | 'folders' | 'import' | 'appearance' | 'about'
     onclose?: () => void
     onTheme?: (t: 'light' | 'dark' | 'system') => void
     onDensity?: (d: 'compact' | 'normal' | 'comfortable') => void
@@ -26,6 +27,7 @@
 
   const sections = [
     { id: 'library', label: 'Library' },
+    { id: 'folders', label: 'Folders' },
     { id: 'import', label: 'Import' },
     { id: 'appearance', label: 'Appearance' },
     { id: 'about', label: 'About' }
@@ -129,6 +131,9 @@
           </span>
         </div>
       </section>
+
+    {:else if section === 'folders'}
+      <ScanPanel />
 
     {:else if section === 'import'}
       <GmbImport ondone={onclose} />

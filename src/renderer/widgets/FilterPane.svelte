@@ -68,6 +68,7 @@
   .pane {
     display: grid;
     grid-template-rows: auto 1fr;
+    height: 100%;
     min-height: 0;
     min-width: 0;
     border-right: 1px solid var(--border-default);
@@ -77,13 +78,15 @@
     display: flex;
     align-items: center;
     gap: var(--space-3);
-    padding: var(--space-2) var(--space-4);
+    height: var(--row-height);
+    padding: 0 var(--space-3);
     background: var(--column-header);
     border-bottom: 1px solid var(--column-separator);
   }
 
   select {
-    height: var(--control-height-sm);
+    min-width: 0;
+    height: calc(var(--row-height) - 8px);
     font: inherit;
     color: var(--text-body);
     background: transparent;
@@ -93,7 +96,7 @@
 
   .count { font-size: var(--font-size-sm); color: var(--text-tertiary); }
 
-  ul { margin: 0; padding: 0; overflow-y: auto; list-style: none; }
+  ul { margin: 0; padding: 0; height: 100%; overflow-y: auto; list-style: none; }
 
   .row {
     display: grid;
@@ -116,8 +119,8 @@
   .all { font-style: italic; color: var(--text-secondary); }
   .all.sel { font-style: normal; }
 
-  .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .n { font-variant-numeric: tabular-nums; color: var(--text-secondary); }
+  .label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .n { flex: 0 0 auto; font-variant-numeric: tabular-nums; color: var(--text-secondary); }
   .empty {
     display: block;
     height: auto;

@@ -24,7 +24,7 @@
 </section>
 
 <style>
-  .tabbed { display: grid; grid-template-rows: auto 1fr; min-height: 0; }
+  .tabbed { display: grid; grid-template-rows: auto 1fr; height: 100%; min-height: 0; }
 
   .tabs {
     display: flex;

@@ -300,6 +300,43 @@ which one actually decided the grouping (`manual` | `mbid` | `acoustid` | `audio
 `heuristic`). `pinned = 1` marks a human decision that automated passes must never override — the
 same reversibility trick used for album identity in §17.1.
 
+### 3.5.0 Resolving a file to a track — implemented
+
+Both the gmbrc importer and the filesystem scanner funnel through `src/main/library/identity.ts`, so
+that running either twice is idempotent and running both does not produce two tracks for one song.
+
+Resolution order, stopping at the first match:
+
+| Order | Match | Meaning |
+|---|---|---|
+| 1 | `media.uri` + `subtrack_index` | The same path is the same media, full stop. |
+| 2 | `media.audio_hash` | Same audio at a different path: the file moved or was renamed. |
+| 3 | `tracks.mb_recording_id` | An explicit statement of identity. |
+| 4 | — | Create a new track. |
+
+**The rule is deliberately narrow.** A file attaches to an existing track only when we can *prove*
+it is the same file. Concluding that two *different* files are the same recording is a separate,
+reviewable operation (§9.2, §9.4) — silently collapsing someone's library on import would be the
+wrong default, and unrecoverable without the undo journal.
+
+`identity_key` is computed and stored anyway (`mbid:<id>`, or normalized artist + title + album) so
+a later deduplication pass has something to group by without re-deriving it. `pinned = 1` marks a
+human decision, and the metadata UPDATE carries `WHERE pinned = 0` so automated passes cannot
+overwrite it.
+
+Two policies fall out of the sources being different:
+
+- **The importer is authoritative for statistics**; the scanner is not. A tag must never overwrite
+  Anthem's own rating or play count, so `scanRoots` passes `statistics: false`.
+- **Multi-value fields are replaced, not appended**, or a second import doubles every genre.
+
+Play history needed a uniqueness constraint (migration 002: `UNIQUE(track_id, at, kind)`), without
+which re-importing appended a second copy of every play event.
+
+`test/unit/idempotency.test.ts` and `test/unit/scan.test.ts` pin all of this. The first version of
+the importer failed these: it created 6 tracks from 3 on a second run, 3 of them orphans with no
+media at all, because the track INSERT had no conflict clause while the media INSERT did.
+
 ### 3.5.1 Schema (abridged)
 
 The authoritative version is `src/main/db/migrations/001-initial.sql`.
@@ -802,9 +839,35 @@ interpolated in the UI to avoid a 60 Hz IPC firehose), `track_changed`, `queue_c
 
 ## 9. Library management
 
-### 9.1 Scanning
+### 9.1 Scanning — implemented (watching is not)
 
-- Multiple watched roots, each with include/exclude globs.
+`src/main/library/scan.ts`. Reads only: files are opened for tag parsing and hashing, and nothing in
+the scanner writes to the music tree.
+
+What works today:
+
+- Multiple roots, added through Settings → Folders, with a progress-reporting scan.
+- Tag reading via `music-metadata`, which is **read-only by construction** — a good fit for the
+  read-only posture in §7.0, and it defers the tag-writer decision (Appendix A.3) entirely.
+- **Unchanged files take a cheap path**: a matching `uri` + `mtime` + `filesize` skips parsing and
+  hashing altogether, which is what makes a rescan fast.
+- **Move detection** via `audio_hash`: a renamed file keeps its track, rating and play history.
+- **Missing files are flagged, never deleted** — and only media *under a scanned root* is
+  considered, so unplugging one drive does not mark another library missing.
+- Unreadable files are collected as errors rather than aborting the scan.
+- Writes are batched 200 files per transaction; a cancel flag stops the walk between files.
+
+Still to do:
+
+- **Filesystem watching** (`chokidar` or `fs.watch`) for live updates; today a rescan is manual.
+- **Include/exclude globs** per root; only a default directory exclusion list exists.
+- **The `slow` flag** for network mounts is in the schema and honoured by `scanRoots`, but is not
+  yet settable in the UI.
+- Running the scan in a **worker thread**. It currently runs on the main thread with batched
+  transactions, which is acceptable at the §12 target but will block the UI on a very large first
+  scan.
+
+Original design notes, still applicable:
 - Initial scan: parallel walk (`ignore` crate), per-file tag read on a rayon pool, batched inserts in
   one transaction per 5,000 files. Target: 100k files in under 4 minutes on an NVMe SSD.
 - Incremental: `notify`-based filesystem watching with debounce; on startup, an mtime/size sweep
@@ -819,6 +882,82 @@ interpolated in the UI to avoid a 60 Hz IPC firehose), `track_changed`, `queue_c
 Find duplicates by any of: `mb_recording_id`, content hash, or fuzzy (normalized artist+title+length
 within a tolerance). Present as groups with a rule-based keeper selection (highest bitrate, preferred
 format, oldest added, in-preferred-folder) and a reviewed batch action.
+
+### 9.4 Merging tracks by hand — specified, not built
+
+§3.5.0 deliberately refuses to guess that two different files are the same recording. That leaves a
+gap the user has to be able to close: **select several tracks and merge them into one, choosing
+which value to keep wherever they disagree.**
+
+The reference is Thunderbird CardBook's duplicate merge: rather than picking a winning *record*, it
+shows the conflicting *fields* side by side and lets the user resolve each one. That is the right
+model here, because the correct answer is usually per-field — one file has the better title, another
+has the year, a third has the genre.
+
+#### 9.4.1 What a merge does
+
+The survivor is one existing track; the others are absorbed and deleted.
+
+| Thing | Behaviour |
+|---|---|
+| Media | All sources move to the survivor. This is the point: one track, several files. |
+| Scalar fields | Per-field choice where sources disagree; identical values pass through silently. |
+| Multi-value fields | Per-field choice of **union** (default) or one source's set. |
+| Rating | Default: the highest. A deliberate rating should not be lost to an unrated duplicate. |
+| Play count, skip count | Summed. They are counts of real events. |
+| Play history | Union, deduplicated by the migration-002 constraint. |
+| First played, added | Earliest. Last played, last skipped: latest. |
+| Playlists | Entries repointed to the survivor, then deduplicated within each playlist. |
+| Identity | Survivor gets `pinned = 1` and `identity_source = 'manual'`, so nothing re-splits it. |
+
+#### 9.4.2 The preview is the contract
+
+`mergePreview(ids)` returns, for every field, the distinct values across the sources and which
+track each came from — so the UI is a rendering of that structure rather than its own logic, and the
+same preview can be unit-tested without a DOM.
+
+```jsonc
+{
+  "survivor": 412,                       // proposed; the user may pick another
+  "fields": [
+    { "field": "title",  "conflict": false, "value": "So What" },
+    { "field": "year",   "conflict": true,
+      "options": [ { "from": 412, "value": 1959 }, { "from": 987, "value": 1997 } ] },
+    { "field": "genre",  "conflict": true, "multi": true,
+      "options": [ { "from": 412, "value": ["Jazz"] }, { "from": 987, "value": ["Jazz", "Modal"] } ],
+      "union": ["Jazz", "Modal"] }
+  ],
+  "media": [ { "from": 412, "uri": "…/so-what.flac" }, { "from": 987, "uri": "…/so what.mp3" } ],
+  "statistics": { "playCount": 31, "rating": 100, "note": "summed / highest" }
+}
+```
+
+#### 9.4.3 Undo
+
+A merge deletes rows, which makes it the most destructive operation in the app that does not touch a
+file. It must be reversible: the whole pre-merge state of every absorbed track is written to the
+existing `tag_writes`-style journal (or a sibling `merge_journal`) under one batch id, and
+`unmerge(batchId)` restores it. **This is a prerequisite, not a follow-up** — shipping merge without
+undo would be shipping a way to quietly lose ratings and history.
+
+#### 9.4.4 What is needed to build it
+
+1. `src/main/library/merge.ts` — `mergePreview(db, ids)` and `mergeTracks(db, req)`, transactional,
+   with the field-resolution rules above.
+2. A `merge_journal` table plus `unmerge(batchId)`.
+3. IPC: `tracks:mergePreview`, `tracks:merge`, `tracks:unmerge`.
+4. Multi-select in the song list — `shared/view.ts` already has the `Selection` model, so this is
+   wiring, not new logic.
+5. A merge dialog rendering the preview: one row per field, radio per option, union toggle for
+   multi-value fields, and a media list showing what the survivor ends up holding.
+6. Tests: media all move, counts sum, ratings take the max, playlists repoint without duplicating,
+   pinned survivor, and a full round-trip through `unmerge`.
+
+#### 9.4.5 Where it connects
+
+The same preview and apply path serves the automated **duplicate finder** (§9.2): that feature's job
+is to *propose* groups, and this feature's job is to *resolve* them. Building merge first means the
+duplicate finder later only has to produce candidate id sets.
 
 ### 9.3 Import / export
 

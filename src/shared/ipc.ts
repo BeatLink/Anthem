@@ -71,6 +71,33 @@ export interface ImportReport {
   notes: string[]
 }
 
+export interface Root {
+  id: number
+  path: string
+  enabled: boolean
+  slow: boolean
+  lastScan: number | null
+}
+
+export interface ScanProgress {
+  phase: 'walking' | 'reading' | 'finishing'
+  found: number
+  processed: number
+  currentPath?: string
+}
+
+export interface ScanReport {
+  filesFound: number
+  filesRead: number
+  filesSkipped: number
+  tracksCreated: number
+  tracksMatched: number
+  movesDetected: number
+  markedMissing: number
+  errors: { path: string; message: string }[]
+  durationMs: number
+}
+
 export interface AppInfo {
   version: string
   electron: string
@@ -94,7 +121,21 @@ export interface AnthemApi {
   'import:gmbPreview': (path: string) => GmbPreview
   'import:gmbRun': (req: { path: string; statistics?: boolean; labels?: boolean; playlists?: boolean }) => ImportReport
   'library:reset': () => { cleared: boolean }
+  'library:roots': () => Root[]
+  'library:addRoot': () => Root | null
+  'library:removeRoot': (id: number) => { removed: boolean }
+  'library:scan': () => ScanReport
+  'library:scanCancel': () => { cancelled: boolean }
 }
+
+/** Pushed from the main process; the renderer subscribes rather than polling. */
+export interface AnthemEvents {
+  'scan:progress': ScanProgress
+  'scan:done': ScanReport
+}
+
+export type EventName = keyof AnthemEvents
+export const EVENT_CHANNEL = 'anthem:event'
 
 export type Channel = keyof AnthemApi
 export type ApiArgs<C extends Channel> = Parameters<AnthemApi[C]>
@@ -103,5 +144,6 @@ export type ApiResult<C extends Channel> = ReturnType<AnthemApi[C]>
 export const CHANNELS: readonly Channel[] = [
   'app:info', 'app:safety', 'library:stats', 'library:query', 'library:groupBy',
   'library:explain', 'library:reset', 'fields:list', 'theme:list',
-  'import:gmbDefaultPath', 'import:gmbBrowse', 'import:gmbPreview', 'import:gmbRun'
+  'import:gmbDefaultPath', 'import:gmbBrowse', 'import:gmbPreview', 'import:gmbRun',
+  'library:roots', 'library:addRoot', 'library:removeRoot', 'library:scan', 'library:scanCancel'
 ]

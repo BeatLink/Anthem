@@ -7,11 +7,13 @@ import { dirname, join } from 'node:path'
 import { app } from 'electron'
 
 import initial from './migrations/001-initial.sql?raw'
+import historyUnique from './migrations/002-history-unique.sql?raw'
 
 export type DB = Database.Database
 
 const MIGRATIONS: readonly { version: number; sql: string }[] = [
-  { version: 1, sql: initial }
+  { version: 1, sql: initial },
+  { version: 2, sql: historyUnique }
 ]
 
 export function libraryPath(): string {

@@ -6,19 +6,8 @@
 // operation, and silently merging someone's library on import would be the wrong default.
 
 import { join } from 'node:path'
-import { field } from '@shared/fields'
-import type { GmbrcData, GmbSong } from './gmbrc'
-
-type Statement = {
-  run: (...args: never[]) => unknown
-  get: (...args: never[]) => unknown
-  all: (...args: never[]) => unknown[]
-}
-
-type Db = {
-  prepare: (sql: string) => Statement
-  exec: (sql: string) => unknown
-}
+import { createUpserter, type Db, type TrackCandidate } from '../library/identity'
+import type { GmbrcData } from './gmbrc'
 
 export interface ImportOptions {
   /** Import ratings, play counts and history. */
@@ -32,6 +21,8 @@ export interface ImportOptions {
 export interface ImportReport {
   songsRead: number
   tracksCreated: number
+  tracksUpdated: number
+  mediaMatched: number
   mediaCreated: number
   missingFlagged: number
   playHistoryRows: number
@@ -41,29 +32,9 @@ export interface ImportReport {
   notes: string[]
 }
 
-const FIELD_IDS = {
-  artist: field('artist').fieldId!,
-  albumArtist: field('album_artist').fieldId!,
-  genre: field('genre').fieldId!,
-  grouping: field('grouping').fieldId!,
-  tags: field('tags').fieldId!,
-  comment: field('comment').fieldId!
-}
-
-/** Unit separator, so an album name containing the artist name cannot forge a match key. */
-const KEY_SEP = ''
-
 /** gmusicbrowser timestamps are unix seconds; Anthem stores milliseconds. */
 const toMs = (secs: number | undefined): number | null =>
   secs === undefined || secs <= 0 ? null : secs * 1000
-
-const norm = (s: string): string => s.trim().toLocaleLowerCase().replace(/\s+/g, ' ')
-
-const albumMatchKey = (song: GmbSong): string | null => {
-  if (!song.album) return null
-  const artist = song.albumArtist ?? song.artist ?? ''
-  return [norm(artist), norm(song.album), song.year ?? ''].join(KEY_SEP)
-}
 
 export function importGmbrc(db: Db, data: GmbrcData, opts: ImportOptions = {}): ImportReport {
   const withStats = opts.statistics ?? true
@@ -73,6 +44,8 @@ export function importGmbrc(db: Db, data: GmbrcData, opts: ImportOptions = {}): 
   const report: ImportReport = {
     songsRead: data.songs.length,
     tracksCreated: 0,
+    tracksUpdated: 0,
+    mediaMatched: 0,
     mediaCreated: 0,
     missingFlagged: 0,
     playHistoryRows: 0,
@@ -83,53 +56,17 @@ export function importGmbrc(db: Db, data: GmbrcData, opts: ImportOptions = {}): 
   }
 
   const now = Date.now()
+  const upsert = createUpserter(db)
 
-  const insertAlbum = db.prepare(
-    'INSERT OR IGNORE INTO albums (match_key, name, year, added) VALUES (?, ?, ?, ?)')
-  const selectAlbum = db.prepare('SELECT id FROM albums WHERE match_key = ?')
-  const insertTrack = db.prepare(`
-    INSERT INTO tracks (title, album_id, year, track_number, disc_number, length_ms, compilation,
-                        rating, play_count, skip_count, last_played, last_skipped,
-                        rg_track_gain, rg_album_gain, identity_source, added, modified)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'heuristic', ?, ?)`)
-  const insertMedia = db.prepare(`
-    INSERT OR IGNORE INTO media (track_id, kind, uri, codec, bitrate, samplerate, channels,
-                                 filesize, mtime, present, added)
-    VALUES (?, 'file', ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-  const insertValue = db.prepare('INSERT OR IGNORE INTO values_ (field_id, value) VALUES (?, ?)')
-  const selectValue = db.prepare('SELECT id FROM values_ WHERE field_id = ? AND value = ?')
-  const insertTv = db.prepare(
-    'INSERT OR IGNORE INTO track_values (track_id, field_id, value_id, ordinal) VALUES (?, ?, ?, ?)')
-  const insertExtra = db.prepare(
-    'INSERT OR IGNORE INTO track_extras (track_id, field_id, value) VALUES (?, ?, ?)')
   const insertHistory = db.prepare(
-    'INSERT INTO play_history (track_id, at, kind) VALUES (?, ?, ?)')
+    'INSERT OR IGNORE INTO play_history (track_id, at, kind) VALUES (?, ?, ?)')
   const insertPlaylist = db.prepare(
     "INSERT INTO playlists (name, kind, created, modified) VALUES (?, 'static', ?, ?)")
+  const selectPlaylist = db.prepare("SELECT id FROM playlists WHERE name = ? AND kind = 'static'")
+  const clearPlaylist = db.prepare('DELETE FROM playlist_tracks WHERE playlist_id = ?')
   const insertPlaylistTrack = db.prepare(
     'INSERT OR IGNORE INTO playlist_tracks (playlist_id, track_id, position) VALUES (?, ?, ?)')
   const lastId = db.prepare('SELECT last_insert_rowid() AS id')
-
-  const rowId = (): number => (lastId.get() as { id: number }).id
-
-  const valueCache = new Map<string, number>()
-  const internValue = (fieldId: number, value: string): number => {
-    const key = `${fieldId}${KEY_SEP}${value}`
-    const cached = valueCache.get(key)
-    if (cached !== undefined) return cached
-
-    insertValue.run(fieldId as never, value as never)
-    const id = (selectValue.get(fieldId as never, value as never) as { id: number }).id
-    valueCache.set(key, id)
-    return id
-  }
-
-  const addSet = (trackId: number, fieldId: number, values: readonly string[]): void => {
-    values.forEach((v, ordinal) => {
-      insertTv.run(
-        trackId as never, fieldId as never, internValue(fieldId, v) as never, ordinal as never)
-    })
-  }
 
   /** gmusicbrowser song id to Anthem track id, so SavedLists can be resolved afterwards. */
   const trackByGmbId = new Map<number, number>()
@@ -137,69 +74,63 @@ export function importGmbrc(db: Db, data: GmbrcData, opts: ImportOptions = {}): 
   db.exec('BEGIN')
   try {
     for (const song of data.songs) {
-      let albumId: number | null = null
-      const key = albumMatchKey(song)
-      if (key !== null) {
-        insertAlbum.run(key as never, song.album as never, (song.year ?? null) as never, now as never)
-        albumId = (selectAlbum.get(key as never) as { id: number }).id
+      const candidate: TrackCandidate = {
+        title: song.title ?? null,
+        album: song.album ?? null,
+        artist: song.artist ?? null,
+        albumArtist: song.albumArtist ?? null,
+        year: song.year ?? null,
+        trackNumber: song.track ?? null,
+        discNumber: song.disc ?? null,
+        lengthMs: song.length !== undefined ? song.length * 1000 : null,
+        compilation: song.compilation ?? false,
+        bpm: null,
+        rating: withStats ? song.rating ?? null : null,
+        playCount: withStats ? song.playCount ?? 0 : 0,
+        skipCount: withStats ? song.skipCount ?? 0 : 0,
+        lastPlayed: withStats ? toMs(song.lastPlay) : null,
+        lastSkipped: withStats ? toMs(song.lastSkip) : null,
+        rgTrackGain: song.rgTrackGain ?? null,
+        rgAlbumGain: song.rgAlbumGain ?? null,
+        added: toMs(song.added) ?? now,
+        comment: song.comment ?? null,
+        sets: {
+          artist: song.artist ? [song.artist] : [],
+          album_artist: song.albumArtist ? [song.albumArtist] : [],
+          ...(withLabels
+            ? { genre: song.genre, grouping: song.grouping, tags: song.label }
+            : {})
+        }
       }
 
-      insertTrack.run(
-        (song.title ?? null) as never,
-        albumId as never,
-        (song.year ?? null) as never,
-        (song.track ?? null) as never,
-        (song.disc ?? null) as never,
-        (song.length !== undefined ? song.length * 1000 : null) as never,
-        (song.compilation ? 1 : 0) as never,
-        (withStats ? song.rating ?? null : null) as never,
-        (withStats ? song.playCount ?? 0 : 0) as never,
-        (withStats ? song.skipCount ?? 0 : 0) as never,
-        (withStats ? toMs(song.lastPlay) : null) as never,
-        (withStats ? toMs(song.lastSkip) : null) as never,
-        (song.rgTrackGain ?? null) as never,
-        (song.rgAlbumGain ?? null) as never,
-        (toMs(song.added) ?? now) as never,
-        now as never
-      )
-
-      const trackId = rowId()
-      report.tracksCreated++
-      trackByGmbId.set(song.gmbId, trackId)
-
-      if (song.path && song.file) {
-        insertMedia.run(
-          trackId as never,
-          join(song.path, song.file) as never,
-          (song.filetype?.split(/\s+/)[0] ?? null) as never,
-          (song.bitrate ?? null) as never,
-          (song.sampleRate ?? null) as never,
-          (song.channels ?? null) as never,
-          (song.size ?? null) as never,
-          toMs(song.modif) as never,
-          (song.missing ? 0 : 1) as never,
-          now as never
-        )
-        report.mediaCreated++
-        if (song.missing) report.missingFlagged++
+      // A gmusicbrowser entry always names a file; without one there is nothing to attach to.
+      if (!song.path || !song.file) {
+        report.notes.push(`Skipped song ${song.gmbId}: no file path recorded.`)
+        continue
       }
 
-      if (song.artist) addSet(trackId, FIELD_IDS.artist, [song.artist])
-      if (song.albumArtist) addSet(trackId, FIELD_IDS.albumArtist, [song.albumArtist])
+      const result = upsert(candidate, {
+        uri: join(song.path, song.file),
+        codec: song.filetype?.split(/\s+/)[0] ?? null,
+        bitrate: song.bitrate ?? null,
+        samplerate: song.sampleRate ?? null,
+        channels: song.channels ?? null,
+        filesize: song.size ?? null,
+        mtime: toMs(song.modif),
+        present: !song.missing
+      }, { statistics: withStats, metadata: true })
 
-      if (withLabels) {
-        addSet(trackId, FIELD_IDS.genre, song.genre)
-        addSet(trackId, FIELD_IDS.grouping, song.grouping)
-        addSet(trackId, FIELD_IDS.tags, song.label)
-      }
+      if (result.created) report.tracksCreated++
+      else report.tracksUpdated++
+      if (result.matchedBy === 'uri' || result.matchedBy === 'audio_hash') report.mediaMatched++
+      else report.mediaCreated++
+      if (song.missing) report.missingFlagged++
 
-      if (song.comment) {
-        insertExtra.run(trackId as never, FIELD_IDS.comment as never, song.comment as never)
-      }
+      trackByGmbId.set(song.gmbId, result.trackId)
 
       if (withStats) {
         for (const at of song.playHistory) {
-          insertHistory.run(trackId as never, (at * 1000) as never, 0 as never)
+          insertHistory.run(result.trackId as never, (at * 1000) as never, 0 as never)
           report.playHistoryRows++
         }
       }
@@ -207,8 +138,15 @@ export function importGmbrc(db: Db, data: GmbrcData, opts: ImportOptions = {}): 
 
     if (withPlaylists) {
       for (const list of data.savedLists) {
-        insertPlaylist.run(list.name as never, now as never, now as never)
-        const playlistId = rowId()
+        const existing = selectPlaylist.get(list.name as never) as { id: number } | undefined
+        let playlistId: number
+        if (existing) {
+          playlistId = existing.id
+          clearPlaylist.run(playlistId as never)
+        } else {
+          insertPlaylist.run(list.name as never, now as never, now as never)
+          playlistId = (lastId.get() as { id: number }).id
+        }
         let position = 0
         for (const gmbId of list.gmbIds) {
           const trackId = trackByGmbId.get(gmbId)

@@ -1,4 +1,4 @@
-import { ipcMain, app, dialog } from 'electron'
+import { ipcMain, app, dialog, BrowserWindow } from 'electron'
 import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 
@@ -9,6 +9,8 @@ import { stats, type DB } from './db'
 import { safetyStatus } from './safety'
 import { defaultGmbrcPath, parseGmbrc } from './import/gmbrc'
 import { importGmbrc } from './import/gmb-import'
+import { scanRoots } from './library/scan'
+import { EVENT_CHANNEL, type AnthemEvents, type EventName, type Root } from '@shared/ipc'
 
 // Album lives on the albums table and artist in track_values, so the row projection has to
 // resolve both rather than reading columns that no longer exist on tracks.
@@ -20,7 +22,16 @@ const TRACK_COLUMNS = `
 
 type Handlers = { [C in Channel]: (...args: Parameters<AnthemApi[C]>) => ReturnType<AnthemApi[C]> }
 
+function emit<E extends EventName>(name: E, payload: AnthemEvents[E]): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    win.webContents.send(EVENT_CHANNEL, { name, payload })
+  }
+}
+
 export function registerIpc(db: DB): void {
+  // A scan runs at most once at a time; the flag is what cancel flips.
+  let scanning: { aborted: boolean } | null = null
+
   const handlers: Handlers = {
     'app:info': () => ({
       version: app.getVersion(),
@@ -101,6 +112,62 @@ export function registerIpc(db: DB): void {
         playlists: req.playlists
       })
     },
+
+    'library:roots': () =>
+      (db.prepare('SELECT id, path, enabled, slow, last_scan FROM roots ORDER BY path').all() as
+        { id: number; path: string; enabled: number; slow: number; last_scan: number | null }[])
+        .map((r) => ({
+          id: r.id, path: r.path, enabled: !!r.enabled, slow: !!r.slow, lastScan: r.last_scan
+        })) as Root[],
+
+    'library:addRoot': () => {
+      const picked = dialog.showOpenDialogSync({
+        title: 'Choose a music folder',
+        properties: ['openDirectory', 'createDirectory']
+      })
+      const path = picked?.[0]
+      if (!path) return null
+
+      db.prepare('INSERT OR IGNORE INTO roots (path, enabled) VALUES (?, 1)').run(path)
+      const row = db.prepare('SELECT id, path, enabled, slow, last_scan FROM roots WHERE path = ?')
+        .get(path) as { id: number; path: string; enabled: number; slow: number; last_scan: number | null }
+      return { id: row.id, path: row.path, enabled: !!row.enabled, slow: !!row.slow, lastScan: row.last_scan }
+    },
+
+    'library:removeRoot': (id) => {
+      db.prepare('DELETE FROM roots WHERE id = ?').run(id)
+      return { removed: true }
+    },
+
+    'library:scanCancel': () => {
+      if (scanning) scanning.aborted = true
+      return { cancelled: scanning !== null }
+    },
+
+    'library:scan': (() => {
+      // Declared async so the handler returns a promise to the renderer's invoke().
+      const run = async (): Promise<never> => {
+        if (scanning) throw new Error('a scan is already running')
+
+        const roots = (db.prepare('SELECT path FROM roots WHERE enabled = 1').all() as
+          { path: string }[]).map((r) => r.path)
+        if (roots.length === 0) throw new Error('no music folders configured')
+
+        scanning = { aborted: false }
+        try {
+          const report = await scanRoots(db as never, roots, {
+            signal: scanning,
+            onProgress: (p) => emit('scan:progress', p)
+          })
+          db.prepare('UPDATE roots SET last_scan = ? WHERE enabled = 1').run(Date.now())
+          emit('scan:done', report)
+          return report as never
+        } finally {
+          scanning = null
+        }
+      }
+      return run as never
+    })(),
 
     'library:reset': () => {
       db.exec(`DELETE FROM playlist_tracks; DELETE FROM playlists; DELETE FROM play_history;

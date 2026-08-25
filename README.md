@@ -14,6 +14,9 @@ implemented yet. See the roadmap in DESIGN-SPEC §15.
 | Area | State |
 |---|---|
 | SQLite schema, migrations, entity model | working |
+| Identity resolution (idempotent import and scan) | working |
+| Filesystem scanner (read-only, move detection) | working |
+| gmusicbrowser import | working |
 | Filter AST → SQL and → native predicate | working, agreement property-tested |
 | Audio content hashing (move/rename detection) | working |
 | Field descriptor system | working |
@@ -22,8 +25,9 @@ implemented yet. See the roadmap in DESIGN-SPEC §15.
 | Halon theming | working |
 | Renderer shell | placeholder widgets |
 | Playback (mpv) | not started |
-| Tag reading/writing | not started |
-| Scanner | not started |
+| Tag writing | not started (read-only by default) |
+| Filesystem watching | not started |
+| Merge duplicate tracks | specified, not built (DESIGN-SPEC §9.4) |
 
 ## The one idea worth knowing
 
@@ -77,7 +81,13 @@ unless the path is inside Anthem's own data directory. Point it at a real music 
 Settings → Import reads a gmusicbrowser `gmbrc`, defaulting to the standard location for your
 platform. It imports ratings, play counts, skip counts, full play history, genres, groupings,
 labels and saved lists. A preview parses the file without writing anything, so you see the counts
-first. There is no filesystem scanner yet — the importer is currently the way to populate a library.
+first.
+
+Settings → Folders adds music directories and scans them. Scanning reads tags only; it never
+overwrites Anthem's own ratings or play counts, recognises moved and renamed files by audio content,
+and flags files that have disappeared rather than deleting their tracks.
+
+Both are idempotent. Running either twice, or both in either order, will not duplicate anything.
 
 ## Testing
 

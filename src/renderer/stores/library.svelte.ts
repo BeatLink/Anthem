@@ -35,7 +35,9 @@ class LibraryStore {
   }
 
   chips(): readonly { id: string; label: string }[] {
-    return this.stack.list().map((c) => ({ id: c.id, label: c.label }))
+    // FilterStack is a plain class, so reading `version` is what ties this to the reactive graph.
+    void this.version
+    return this.stack.list().filter((c) => c.removable).map((c) => ({ id: c.id, label: c.label }))
   }
 
   /**
@@ -131,10 +133,12 @@ class LibraryStore {
   }
 
   sortPriority(fieldId: string): number {
+    void this.version
     return this.sort.priority(fieldId)
   }
 
   sortDir(fieldId: string): 'asc' | 'desc' | null {
+    void this.version
     return this.sort.list().find((k) => k.field === fieldId)?.dir ?? null
   }
 }
