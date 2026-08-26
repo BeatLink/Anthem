@@ -13,6 +13,54 @@
 
   let merging = $state<number[] | null>(null)
   let inspecting = $state<number | null>(null)
+
+  /** The keyboard cursor: which row arrow keys move from. */
+  let cursor = $state(0)
+  let bodyEl = $state<HTMLElement | null>(null)
+
+  function focusRow(index: number): void {
+    const el = bodyEl?.querySelector<HTMLElement>(`[data-row="${index}"]`)
+    el?.focus({ preventScroll: true })
+    el?.scrollIntoView({ block: 'nearest' })
+  }
+
+  /**
+   * Arrow keys move the cursor; holding shift extends the selection from the anchor instead of
+   * replacing it, which is what makes a range adjustable without the mouse.
+   */
+  function onListKeydown(e: KeyboardEvent): void {
+    const last = library.tracks.length - 1
+    if (last < 0) return
+
+    const rowsPerPage = Math.max(1, Math.floor((bodyEl?.clientHeight ?? 400) / 28) - 1)
+
+    let next: number | null = null
+    switch (e.key) {
+      case 'ArrowDown': next = Math.min(last, cursor + 1); break
+      case 'ArrowUp': next = Math.max(0, cursor - 1); break
+      case 'PageDown': next = Math.min(last, cursor + rowsPerPage); break
+      case 'PageUp': next = Math.max(0, cursor - rowsPerPage); break
+      case 'Home': next = 0; break
+      case 'End': next = last; break
+      case 'a':
+        if (e.ctrlKey || e.metaKey) { e.preventDefault(); library.selectAll() }
+        return
+      case 'Escape':
+        library.clearSelection()
+        return
+      default:
+        return
+    }
+
+    e.preventDefault()
+    cursor = next
+
+    // Ctrl alone moves the cursor without disturbing the selection, as lists conventionally do.
+    if (!(e.ctrlKey || e.metaKey) || e.shiftKey) {
+      library.clickRow(next, { shift: e.shiftKey, ctrl: e.ctrlKey || e.metaKey })
+    }
+    focusRow(next)
+  }
   let menu = $state<{ x: number; y: number; items: MenuItem[] } | null>(null)
 
   /** Right-clicking a row that is not selected selects it, as every list does. */
@@ -194,7 +242,7 @@
     {/if}
     <span class="spacer"></span>
     <span class="hint" title="Click a column header to sort. Shift+click another to sort by it next.">
-      double-click to play · right-click for actions · shift+click to multi-sort
+      ↑↓ to move · shift+↑↓ to select · double-click to play · right-click for actions
     </span>
     <span class="count">{library.tracks.length.toLocaleString()} shown</span>
   </div>
@@ -237,7 +285,8 @@
     {/each}
   </div>
 
-  <div class="body">
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+  <div class="body" bind:this={bodyEl} role="rowgroup" onkeydown={onListKeydown}>
     {#each library.tracks as t, i (t.id)}
       <div
         class="row"
@@ -245,8 +294,9 @@
         class:playing={player.currentId === t.id}
         style:grid-template-columns={template}
         role="row"
-        tabindex="0"
-        onclick={(e) => selectRow(i, e)}
+        tabindex={i === cursor ? 0 : -1}
+        data-row={i}
+        onclick={(e) => { cursor = i; selectRow(i, e) }}
         ondblclick={() => playFrom(i)}
         oncontextmenu={(e) => openMenu(e, i)}
         onkeydown={(e) => {
@@ -426,6 +476,7 @@
     user-select: none;
   }
 
+  .row:focus-visible { outline: 2px solid var(--border-focus); outline-offset: -2px; }
   .row:hover { background: var(--row-hover); }
   /* After :hover deliberately — a selected row stays visibly selected under the pointer. */
   .row.sel { background: var(--row-selected); }

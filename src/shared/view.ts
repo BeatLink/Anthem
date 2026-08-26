@@ -47,7 +47,11 @@ export function virtualWindow(
   return { start, end, offsetPx: start * rowHeight, totalPx }
 }
 
-export type SelectionIntent = 'replace' | 'toggle' | 'range'
+/**
+ * `range` replaces the selection with anchor..index, which is what makes shift+arrow able to shrink
+ * again when the direction reverses. `range-add` keeps what was already selected, for ctrl+shift.
+ */
+export type SelectionIntent = 'replace' | 'toggle' | 'range' | 'range-add'
 
 /**
  * The selection model every list widget shares. Anchored ranges, toggles and inversion behave the
@@ -87,10 +91,16 @@ export class Selection {
     } else {
       const from = this.anchor ?? index
       const [lo, hi] = from <= index ? [from, index] : [index, from]
+
+      // A plain range starts from nothing, so walking back with shift+arrow shrinks the selection
+      // rather than leaving a trail behind it.
+      if (intent === 'range') this.set.clear()
+
       for (let i = lo; i <= hi; i++) {
         const rid = ordered[i]
         if (rid !== undefined) this.set.add(rid)
       }
+      // The anchor deliberately stays put: every extension measures from the same origin.
     }
 
     this.bump()

@@ -857,7 +857,15 @@ Virtualized, 250k rows, 60 fps scroll. Non-negotiable behaviours:
 - Multi-key sort (shift-click to add a sort key), sort indicator shows priority.
 - Grouping mode (SongTree): group by any field, sticky group headers with album art, per-group
   aggregate row (count, total duration).
-- Selection: range, toggle, invert, "select all in group", keyboard-first.
+- Selection: range, toggle, invert, "select all in group", keyboard-first. Arrow keys move a
+  cursor, shift extends the range from the anchor, ctrl+shift extends without discarding what is
+  already selected, and ctrl alone moves the cursor without disturbing the selection. Home, End,
+  Page Up and Page Down move by list and by page; Ctrl+A selects all; Escape clears.
+
+  **A range replaces rather than accumulates.** That is what lets shift+arrow shrink again when the
+  direction reverses, and it matches what a range-click does everywhere else; `range-add` exists for
+  ctrl+shift, where keeping the existing selection is the point. The anchor stays put across
+  extensions, so every one measures from the same origin instead of creeping.
 - Inline rating (click the star position), inline field edit on slow double-click for editable
   string fields.
 - Drag to queue, to playlist, to another app (URI list), from the filesystem in.

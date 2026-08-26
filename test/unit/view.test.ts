@@ -53,6 +53,33 @@ describe('selection', () => {
     expect(s.ids().sort((a, b) => a - b)).toEqual([20, 30, 40])
   })
 
+  it('shrinks when the range reverses, because a range replaces rather than accumulates', () => {
+    const s = new Selection()
+    s.apply(ordered, 0, 'replace')
+    s.apply(ordered, 4, 'range')
+    expect(s.size).toBe(5)
+
+    // Walking back with shift held should give back the rows, not keep them.
+    s.apply(ordered, 2, 'range')
+    expect(s.ids().sort((a, b) => a - b)).toEqual([10, 20, 30])
+  })
+
+  it('keeps the anchor put, so every extension measures from the same origin', () => {
+    const s = new Selection()
+    s.apply(ordered, 2, 'replace')
+    s.apply(ordered, 4, 'range')
+    s.apply(ordered, 0, 'range')
+    expect(s.ids().sort((a, b) => a - b)).toEqual([10, 20, 30])
+  })
+
+  it('adds to the existing selection with range-add, for ctrl+shift', () => {
+    const s = new Selection()
+    s.apply(ordered, 0, 'replace')
+    s.apply(ordered, 4, 'toggle')
+    s.apply(ordered, 2, 'range-add')
+    expect(s.ids().sort((a, b) => a - b)).toEqual([10, 30, 40, 50])
+  })
+
   it('inverts within the current result set', () => {
     const s = new Selection()
     s.apply(ordered, 0, 'replace')

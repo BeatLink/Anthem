@@ -131,7 +131,10 @@ class LibraryStore {
 
   clickRow(index: number, modifiers: { shift?: boolean; ctrl?: boolean }): void {
     const ordered = this.tracks.map((t) => t.id)
-    const intent = modifiers.shift ? 'range' : modifiers.ctrl ? 'toggle' : 'replace'
+    const intent = modifiers.shift
+      ? (modifiers.ctrl ? 'range-add' : 'range')
+      : modifiers.ctrl ? 'toggle' : 'replace'
+
     this.selection.apply(ordered, index, intent)
     this.selectionVersion++
   }

@@ -74,3 +74,37 @@ describe('song list selection', () => {
     expect(library.selectedCount()).toBe(0)
   })
 })
+
+describe('keyboard range selection', () => {
+  it('extends and then shrinks as the direction reverses', () => {
+    library.clickRow(1, {})
+
+    // shift+ArrowDown three times
+    library.clickRow(2, { shift: true })
+    library.clickRow(3, { shift: true })
+    library.clickRow(4, { shift: true })
+    expect(library.selectedIds().sort((a, b) => a - b)).toEqual([20, 30, 40, 50])
+
+    // shift+ArrowUp gives the rows back rather than leaving a trail
+    library.clickRow(3, { shift: true })
+    library.clickRow(2, { shift: true })
+    expect(library.selectedIds().sort((a, b) => a - b)).toEqual([20, 30])
+  })
+
+  it('crosses the anchor without stranding rows behind it', () => {
+    library.clickRow(3, {})
+    library.clickRow(1, { shift: true })
+    expect(library.selectedIds().sort((a, b) => a - b)).toEqual([20, 30, 40])
+
+    library.clickRow(5, { shift: true })
+    expect(library.selectedIds().sort((a, b) => a - b)).toEqual([40, 50, 60])
+  })
+
+  it('keeps an existing selection with ctrl+shift', () => {
+    library.clickRow(0, {})            // {10}, anchor 0
+    library.clickRow(4, { ctrl: true }) // {10,50}, anchor moves to 4
+    library.clickRow(2, { ctrl: true, shift: true }) // adds 2..4 without dropping 10
+
+    expect(library.selectedIds().sort((a, b) => a - b)).toEqual([10, 30, 40, 50])
+  })
+})
