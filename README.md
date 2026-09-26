@@ -50,7 +50,7 @@ the track, never a key.
 The Nix flake pins everything, including the Electron the native module is built against.
 
 ```sh
-direnv allow        # or: nix develop
+nix develop
 npm install
 npm run dev
 ```
