@@ -3,7 +3,7 @@
 A desktop music player with gmusicbrowser's data model and power, a web-technology UI that users can
 re-layout and re-skin, and [Halon](https://github.com/BeatLink/Halon) as its reference theme.
 
-The design is specified in full in [DESIGN-SPEC.md](DESIGN-SPEC.md). This README covers only how to
+The design is specified in full in [DESIGN-SPEC.md](docs/DESIGN-SPEC.md). This README covers only how to
 run what exists.
 
 ## Status
