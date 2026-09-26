@@ -23,6 +23,57 @@
         ];
       in
       {
+        packages.default = pkgs.buildNpmPackage {
+          pname = "anthem";
+          version = (builtins.fromJSON (builtins.readFile ./package.json)).version;
+          src = self;
+
+          npmDepsHash = "sha256-xu1fEnBRr8pbt8SQzhXTMb/MxGC/tJnwofTgE1E5M4o=";
+          inherit nodejs;
+
+          nativeBuildInputs = with pkgs; [ makeWrapper copyDesktopItems autoPatchelfHook ];
+          buildInputs = [ pkgs.stdenv.cc.cc.lib ];
+
+          env.ELECTRON_SKIP_BINARY_DOWNLOAD = "1";
+
+          # The postinstall electron-rebuild needs the network, and better-sqlite3 ships N-API prebuilds Electron can load.
+          npmRebuildFlags = [ "--ignore-scripts" ];
+
+          buildPhase = ''
+            runHook preBuild
+            npx electron-vite build
+            runHook postBuild
+          '';
+
+          installPhase = ''
+            runHook preInstall
+            npm prune --omit=dev --ignore-scripts
+            # Only the host platform's prebuild can be patched to find libstdc++.
+            find node_modules/better-sqlite3/prebuilds -name "*.node" ! -name "linux-${pkgs.stdenv.hostPlatform.node.arch}.node" -delete
+            mkdir -p $out/lib/anthem
+            cp -r out package.json node_modules $out/lib/anthem/
+            makeWrapper ${electron}/bin/electron $out/bin/anthem \
+              --add-flags $out/lib/anthem \
+              --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.mpv ]} \
+              --set-default ANTHEM_ALLOW_WRITES 1 \
+              --unset ELECTRON_RUN_AS_NODE
+            runHook postInstall
+          '';
+
+          desktopItems = [
+            (pkgs.makeDesktopItem {
+              name = "anthem";
+              desktopName = "Anthem";
+              comment = "Music player";
+              exec = "anthem %U";
+              icon = "audio-x-generic";
+              categories = [ "Audio" "AudioVideo" "Player" ];
+            })
+          ];
+
+          meta.mainProgram = "anthem";
+        };
+
         devShells.default = pkgs.mkShell {
           packages = with pkgs; [
             nodejs
