@@ -47,7 +47,7 @@ Anthem keeps the model and replaces the substrate:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│  Renderer (Chromium)  —  TypeScript · Svelte 5 · Vite               │
+│  Renderer (Chromium)  —  TypeScript · Preact + signals · Vite       │
 │  Deliberately thin: it maps state to pixels and nothing else.       │
 │                                                                     │
 │  ┌───────────────┐  ┌──────────────┐  ┌────────────────────────┐    │
@@ -96,15 +96,23 @@ The honest cost: ~150 MB install and ~350–500 MB resident for an app people le
 core (worst packaging story, and the UI is TypeScript regardless, so it buys two languages for one
 benefit), pure web/PWA (no tag writing, no gapless, no filesystem watch).
 
-### 2.2 Renderer: TypeScript + Svelte 5 + Vite
+### 2.2 Renderer: TypeScript + Preact + signals + Vite
 
-Svelte 5 runes over React because the two hot paths — a virtualized list of tens of thousands of
-rows and a playback position tick — are where React's re-render accounting costs most, and because
-scoped token-only styling is built into Svelte SFCs rather than being a separate decision.
+Preact because it is the React programming model — JSX, function components, hooks — which is the
+most widely known way to write a web UI, in a 4 KB runtime. `@preact/signals` carries the view-model
+stores: a component that reads a signal during render subscribes to it, and only that component
+re-renders when it changes. That keeps the two hot paths — the song list and the playback position
+tick — from re-rendering the tree above them. The song list's rows are memoized, so a selection
+change re-renders the rows whose state changed rather than every row.
+
+Styles are CSS Modules: each component has a `Foo.module.css` beside it, with class names scoped at
+build time. Element selectors are not scoped by CSS Modules, so component stylesheets select on
+classes only.
+
+`preact/compat` makes most React libraries usable, including `dnd-kit` for the M7 layout editor.
 
 **This choice is deliberately made cheap to reverse.** See §2.4: everything that is expensive to
-rewrite lives outside the renderer. The strongest argument for React is `dnd-kit` for the M7 layout
-editor; if that becomes binding, the port is a handful of thin components.
+rewrite lives outside the renderer.
 
 ### 2.3 Process model
 
@@ -119,11 +127,11 @@ Three execution contexts, and the split is not optional:
 IPC is `contextBridge` over the contract in `src/shared/ipc.ts`. Because both sides import the same
 module, the boundary is typechecked end to end with no codegen step.
 
-**One hazard is worth writing down, because it cost a wrong fix.** Svelte 5 wraps reactive arrays
-and objects in Proxies, and `contextBridge` clones arguments as they cross from the page's world
-into the preload's isolated world — a clone that happens *before* any preload code runs. So a
-Proxy argument fails with "An object could not be cloned" no matter what the preload does; the
-flattening has to happen in the renderer. Every call therefore goes through `src/renderer/lib/ipc.ts`
+**One hazard is worth writing down, because it cost a wrong fix.** `contextBridge` clones
+arguments as they cross from the page's world into the preload's isolated world — a clone that
+happens *before* any preload code runs. So an argument that structured clone rejects, such as a
+Proxy, fails with "An object could not be cloned" no matter what the preload does; the flattening
+has to happen in the renderer. Every call therefore goes through `src/renderer/lib/ipc.ts`
 rather than touching `window.anthem` directly.
 
 The symptom is easy to misread: the handler never runs, so nothing appears in the main process log,
@@ -916,7 +924,7 @@ have nowhere to live.
 files?", "which copy plays?", "is this one track or two?", "did my rating survive?") is answered by
 this one view. It is also read-only, so it carries none of the risk of the tag editor.
 
-`src/main/library/details.ts` gathers it; `SongProperties.svelte` renders it as a full-screen view
+`src/main/library/details.ts` gathers it; `SongProperties.tsx` renders it as a full-screen view
 reached from the song list (select one track, then Properties, or Alt+Enter).
 
 Four sections: **Overview** (metadata, identity, statistics, loudness, merge provenance),
@@ -1557,7 +1565,7 @@ anthem/
 
 ## 15. Roadmap
 
-**M0 — Skeleton. ✅ done.** Electron shell, Vite/Svelte renderer, typed IPC via a shared contract,
+**M0 — Skeleton. ✅ done.** Electron shell, Vite renderer, typed IPC via a shared contract,
 Halon tokens → CSS variables, Nix dev shell pinning node/electron/mpv. Went further than planned
 because the entity-model decision arrived early: the schema, both query compilers, audio content
 hashing, the field descriptor system, the format-string engine, framework-free view state, and a
@@ -1618,7 +1626,7 @@ visualizer library, multi-library support.
 | **Audio content hash for file identity; AcoustID as a hint only** (§3.5) | None. AcoustID's many-to-many mapping to recordings rules it out as a key regardless of collision rate. |
 | **Two-valued filter logic** (§13.1) | User reports that "not X" excluding unknowns is expected; unlikely |
 | **50k target, and no in-memory index** (§3.5.3, §12) | A real library misses a §12 budget. The trigger is a measurement, not a hunch; `evaluate.ts` already exists to be fed by an index. |
-| Svelte 5 over React | `dnd-kit` proves necessary for the M7 layout editor. Cheap by construction (§2.4). |
+| Preact + signals over Svelte and React | A needed React library fails under `preact/compat`, or signals stop keeping the hot paths local. Cheap by construction (§2.4). |
 | libmpv default engine | Packaging friction on Windows/macOS → promote a Web Audio or native fallback |
 | `node-taglib-sharp` for tags | Golden-file failures it cannot fix → swap the `TagIO` implementation for a mutagen sidecar (Appendix A.5) |
 | JSON layouts, not a DSL | Users find JSON hostile → add a friendlier surface *above* JSON, never replace it |
@@ -1956,7 +1964,7 @@ compiler that makes the field-descriptor and filter-AST systems genuinely hard t
 Every UI iteration crosses a compile boundary.
 
 **Stack B — TypeScript end to end. ← recommended**
-Electron · TypeScript · better-sqlite3 · node-taglib-sharp · mpv over JSON IPC · Svelte 5.
+Electron · TypeScript · better-sqlite3 · node-taglib-sharp · mpv over JSON IPC · Preact.
 *Best at:* velocity. One language, one type system, one build, shared types across the IPC boundary
 with zero codegen. Instant reload on both sides. One rendering engine, so §6.4's CSS restrictions
 evaporate — `:has()`, container queries and subgrid all become available, which measurably helps a

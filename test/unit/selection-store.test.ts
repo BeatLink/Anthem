@@ -2,7 +2,7 @@
 // passing while the UI misbehaves is exactly the gap worth closing.
 
 import { describe, expect, it, beforeEach, vi } from 'vitest'
-import { library } from '../../src/renderer/stores/library.svelte'
+import { library } from '../../src/renderer/stores/library'
 import type { TrackRow } from '@shared/ipc'
 
 const rows = (n: number): TrackRow[] =>

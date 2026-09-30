@@ -1,5 +1,5 @@
-// Arguments cross Electron's IPC boundary by structured clone, which rejects Proxies. Svelte 5
-// wraps every reactive array and object in one, so this is not a hypothetical.
+// Arguments cross Electron's IPC boundary by structured clone, which rejects Proxies and other
+// uncloneable values, so the bridge has to flatten them first.
 
 import { describe, expect, it } from 'vitest'
 import { toCloneable } from '@shared/ipc'

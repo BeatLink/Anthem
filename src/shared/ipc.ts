@@ -343,8 +343,8 @@ export type EventName = keyof AnthemEvents
 export const EVENT_CHANNEL = 'anthem:event'
 
 /**
- * Svelte 5 wraps reactive arrays and objects in Proxies, and a Proxy cannot cross Electron's IPC
- * boundary — it fails with "An object could not be cloned". Rather than making every call site
+ * A value that structured clone rejects, such as a Proxy, cannot cross Electron's IPC boundary —
+ * it fails with "An object could not be cloned". Rather than making every call site
  * remember to unwrap, the bridge enforces its own contract: a value that already survives
  * structured cloning passes through untouched, and anything else is flattened to plain JSON.
  * Every argument in this contract is JSON-shaped, so nothing is lost.

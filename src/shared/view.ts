@@ -1,7 +1,7 @@
 // Framework-free view state: selection, the filter stack, sort state, and virtualization maths.
 //
 // This is deliberately plain TypeScript with no reactivity primitives. Whatever UI framework sits
-// on top only needs to observe `version` and re-read; swapping Svelte for React (or adding a second
+// on top only needs to observe `version` and re-read; swapping the UI framework (or adding a second
 // front end, such as a remote web UI) does not touch anything in this file.
 
 import { and, isGroup, type FilterNode, type SortKey } from './filter'
