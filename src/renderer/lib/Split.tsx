@@ -34,10 +34,15 @@ export function Split({
   const sizesRef = useRef(sizes)
   sizesRef.current = sizes
 
+  /** The space the panes share: the container minus its gutters, which the grid also lays out. */
   function extent(): number {
     const el = container.current
     if (!el) return 0
-    return dir === 'horizontal' ? el.clientWidth : el.clientHeight
+    const along = (e: HTMLElement): number => (dir === 'horizontal' ? e.offsetWidth : e.offsetHeight)
+    const gutters = [...el.children]
+      .filter((c): c is HTMLElement => c instanceof HTMLElement && c.classList.contains(s.gutter!))
+      .reduce((sum, g) => sum + along(g), 0)
+    return (dir === 'horizontal' ? el.clientWidth : el.clientHeight) - gutters
   }
 
   function persist(next: number[]): void {
@@ -104,11 +109,13 @@ export function Split({
 
     const origin = dir === 'horizontal' ? event.clientX : event.clientY
     const before = [...sizesRef.current]
+    let last = before
     setDragging(index)
 
     const move = (e: PointerEvent): void => {
       const now = dir === 'horizontal' ? e.clientX : e.clientY
-      setSizes(resizeAt(before, index, now - origin, specs))
+      last = resizeAt(before, index, now - origin, specs)
+      setSizes(last)
     }
 
     const done = (): void => {
@@ -117,7 +124,7 @@ export function Split({
       handle.removeEventListener('pointermove', move)
       handle.removeEventListener('pointerup', done)
       handle.removeEventListener('pointercancel', done)
-      persist(sizesRef.current)
+      persist(last)
     }
 
     handle.addEventListener('pointermove', move)
