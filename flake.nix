@@ -15,11 +15,12 @@
         electron = pkgs.electron_43;
         nodejs = pkgs.nodejs_22;
 
-        # Shared libraries the Electron binary dlopens at runtime.
+        # Shared libraries the Electron binary and the better-sqlite3 prebuild dlopen at runtime.
         runtimeLibs = with pkgs; [
           glib nss nspr at-spi2-atk at-spi2-core cups dbus libdrm expat
           libxkbcommon mesa alsa-lib pango cairo gtk3 gdk-pixbuf
           libx11 libxcomposite libxdamage libxext libxfixes libxrandr libxcb
+          stdenv.cc.cc.lib
         ];
       in
       {
